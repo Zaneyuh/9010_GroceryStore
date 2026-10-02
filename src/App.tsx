@@ -3,6 +3,7 @@ import CashierMainMenu from './components/CashierMainMenu'
 import OwnerMainMenu from './components/OwnerMainMenu'
 import MakeSale from './components/MakeSale'
 import ReturnRefund from './components/ReturnRefund'
+import ReceiptHistory from './components/ReceiptHistory'
 
 function App() {
   return (
@@ -16,6 +17,7 @@ function App() {
         <Route path="/owner" element={<OwnerMainMenu />} />
         <Route path="/make-a-sale" element={<MakeSale />} />
         <Route path="/return-refund" element={<ReturnRefund />} />
+        <Route path="/receipt-history" element={<ReceiptHistory />} />
       </Routes>
     </HashRouter>
   )
