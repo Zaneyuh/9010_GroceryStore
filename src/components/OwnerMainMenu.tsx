@@ -179,7 +179,7 @@ export default function OwnerDashboard({
     { id: "inventory", label: "Inventory", icon: tileIcons.inventory },
     { id: "requests", label: "Item Requests", icon: tileIcons.requests, badge: 5 },
     { id: "settings", label: "Settings", icon: tileIcons.settings },
-    { id: "receipts", label: "Receipt History", icon: tileIcons.receipt },
+    { id: "receipts", label: "Receipt History", icon: tileIcons.receipt, onClick: () => navigate("/receipt-history") },
     { id: "employees", label: "Manage Employees", icon: tileIcons.employees },
     { id: "pcs", label: "Manage PC's", icon: tileIcons.pcs },
     { id: "reports", label: "Report Center", icon: tileIcons.reports },
