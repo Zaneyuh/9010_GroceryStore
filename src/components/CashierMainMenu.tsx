@@ -135,7 +135,7 @@ export default function CashierMainMenu({
   const tiles: ModuleTile[] = [
     { id: "sale", label: "Make a Sale", description: "Scan items, checkout", icon: icons.sale, onClick: () => navigate("/make-a-sale") },
     { id: "refund", label: "Return & Refund", description: "Process a return", icon: icons.refund, onClick: () => navigate("/return-refund") },
-    { id: "receipts", label: "Receipt History", description: "Look up past sales", icon: icons.receipt },
+    { id: "receipts", label: "Receipt History", description: "Look up past sales", icon: icons.receipt, onClick: () => navigate("/receipt-history") },
     { id: "inventory", label: "Inventory", description: "Check stock on hand", icon: icons.inventory },
     { id: "requests", label: "Item Requests", description: "Log what customers want", icon: icons.requests, badge: 2 },
     { id: "settings", label: "Settings", description: "Terminal preferences", icon: icons.settings },
