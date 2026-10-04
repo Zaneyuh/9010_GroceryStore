@@ -1,0 +1,26 @@
+export const iconRegistry = {
+  brandMark: '9',
+  editors: {
+    Dashboard: '▦',
+    'Product Grid': '▤',
+    Cart: '▣',
+    'Inventory Metrics': '◫',
+    'Inventory Table': '▤',
+    'WMA Forecast': '⌁',
+    'Model Explanation': '∑',
+    Purchasing: '↗',
+    'Waste Log': '⌁',
+    'Customer Requests': '☷',
+    Employees: '♙',
+    Reports: '▥',
+    'Settings Navigation': '⚙',
+    'Business Settings': '⚙',
+  },
+  shortcuts: {
+    'Point of Sale': '↗',
+    Inventory: '▤',
+    'Insights & Reports': '▥',
+    Waste: '⌁',
+    Settings: '⚙',
+  },
+}
