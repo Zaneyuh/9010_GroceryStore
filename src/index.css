@@ -122,7 +122,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .area-gutter:hover .gutter-grip, .is-resizing .gutter-grip { background: var(--green); opacity: 1; }
 .area-gutter:hover.horizontal .gutter-grip, .is-resizing .area-gutter.horizontal .gutter-grip { height: 42px; }
 .area-gutter:hover.vertical .gutter-grip, .is-resizing .area-gutter.vertical .gutter-grip { width: 42px; }
-.split-ghost { position: fixed; z-index: 20; pointer-events: none; background: var(--green); box-shadow: 0 0 12px #9bc777a8; }
+.split-ghost { position: fixed; z-index: 20; pointer-events: none; background: var(--green); box-shadow: 0 0 12px #9bc777a8; animation: split-ghost-appear 120ms ease-out both; }
+@keyframes split-ghost-appear { from { opacity: .25; } to { opacity: 1; } }
 .area-drop-overlay { position: fixed; z-index: 19; display: grid; place-items: center; border: 2px dashed #b8dc94; pointer-events: none; background: #9bc77720; }
 .area-drop-overlay span { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #c4e0a6; border-radius: 50%; color: #eef8e5; background: #35432fcf; font: 700 21px 'Space Grotesk', sans-serif; }
 .area-drop-overlay.swap-preview { border-color: #e7b17b; background: #e4a15f24; }
