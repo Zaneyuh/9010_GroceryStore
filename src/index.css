@@ -124,10 +124,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .area-gutter:hover.vertical .gutter-grip, .is-resizing .area-gutter.vertical .gutter-grip { width: 42px; }
 .split-ghost { position: fixed; z-index: 20; pointer-events: none; background: var(--green); box-shadow: 0 0 12px #9bc777a8; animation: split-ghost-appear 120ms ease-out both; }
 @keyframes split-ghost-appear { from { opacity: .25; } to { opacity: 1; } }
-.area-drop-overlay { position: fixed; z-index: 19; display: grid; place-items: center; border: 2px dashed #b8dc94; pointer-events: none; background: #9bc77720; }
-.area-drop-overlay span { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #c4e0a6; border-radius: 50%; color: #eef8e5; background: #35432fcf; font: 700 21px 'Space Grotesk', sans-serif; }
+.area-drop-overlay { position: fixed; z-index: 19; border: 2px dashed #b8dc94; pointer-events: none; background: #9bc77720; }
 .area-drop-overlay.swap-preview { border-color: #e7b17b; background: #e4a15f24; }
-.area-drop-overlay.swap-preview span { border-color: #e7b17b; color: #ffdfb8; background: #4b3729dc; }
+.join-direction-indicator { position: fixed; z-index: 21; transform: translate(-50%, -50%); pointer-events: none; }
+.join-direction-indicator span { width: 54px; height: 54px; display: grid; place-items: center; border: 1px solid #c4e0a6; border-radius: 50%; color: #eef8e5; background: #35432fe8; box-shadow: 0 5px 22px #0008, 0 0 18px #9bc77740; font: 700 29px 'Space Grotesk', sans-serif; }
+.join-direction-indicator.swap-preview span { border-color: #e7b17b; color: #ffdfb8; background: #4b3729ed; }
+.area-drop-overlay.join-blocked { border-color: #d9776b; background: #c8574a1c; }
+.join-direction-indicator.join-blocked span { border-color: #d9776b; color: #ffc9c0; background: #4a2c28ed; }
 .is-splitting, .is-splitting * { cursor: crosshair !important; }
 
 .dashboard-panel, .pos-products, .cart-panel, .inventory-metrics, .table-panel, .forecast-panel, .model-panel, .module-panel, .settings-nav, .settings-form { width: 100%; min-width: 0; }
