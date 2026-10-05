@@ -1,0 +1,79 @@
+import { useState } from 'react'
+import { allWorkspaces } from '../../data/mockData'
+import type { ForecastMethod, PaymentMethod, Role, Settings } from '../../data/types'
+import { useCurrentUser, useStore, type SettingsSection } from '../../store/StoreContext'
+import { Field, Modal, Segmented } from '../ui'
+
+const sections: SettingsSection[] = ['Business profile', 'Tax & receipts', 'Payment methods', 'Inventory & AI', 'Notifications', 'Access & roles', 'Data']
+
+export function SettingsNav() {
+  const { state, actions } = useStore()
+  return <div className="settings-nav"><span className="eyebrow">CONFIGURATION</span><h2>Store settings</h2>
+    {sections.map((section) => <button className={state.ui.settingsSection === section ? 'selected' : ''} key={section} onClick={() => actions.setUi({ settingsSection: section })}>{section}<span>›</span></button>)}
+  </div>
+}
+
+export function SettingsPanel() {
+  const { state, actions } = useStore()
+  const user = useCurrentUser()
+  const [draft, setDraft] = useState<Settings>(state.settings)
+  const [confirmReset, setConfirmReset] = useState(false)
+  const section = state.ui.settingsSection
+  const dirty = JSON.stringify(draft) !== JSON.stringify(state.settings)
+  const set = <K extends keyof Settings>(key: K, value: Settings[K]) => setDraft((d) => ({ ...d, [key]: value }))
+  const readOnly = user?.role !== 'Owner'
+
+  const save = () => { actions.updateSettings(draft); actions.toast('Settings saved') }
+
+  return <div className="settings-form">
+    <span className="eyebrow">{section.toUpperCase()}</span>
+    {section === 'Business profile' && <>
+      <h2>Store information</h2><p>These details appear on receipts and generated reports.</p>
+      <Field label="REGISTERED BUSINESS NAME"><input value={draft.businessName} onChange={(e) => set('businessName', e.target.value)} /></Field>
+      <Field label="STORE DISPLAY NAME"><input value={draft.storeName} onChange={(e) => set('storeName', e.target.value)} /></Field>
+      <div className="form-row"><Field label="BUSINESS TIN"><input value={draft.tin} onChange={(e) => set('tin', e.target.value)} /></Field><Field label="STORE CODE"><input value={draft.storeCode} onChange={(e) => set('storeCode', e.target.value)} /></Field></div>
+      <Field label="REGISTERED ADDRESS"><textarea value={draft.address} onChange={(e) => set('address', e.target.value)} /></Field>
+    </>}
+    {section === 'Tax & receipts' && <>
+      <h2>Tax &amp; receipts</h2><p>Shelf prices are VAT-inclusive. Senior citizen and PWD sales are VAT-exempt with a 20% discount.</p>
+      <div className="form-row"><Field label="VAT RATE (%)"><input type="number" min={0} max={25} value={Math.round(draft.vatRate * 100)} onChange={(e) => set('vatRate', Number(e.target.value) / 100)} /></Field><Field label="MACHINE SERIAL (MIN)"><input value={draft.machineSerial} onChange={(e) => set('machineSerial', e.target.value)} /></Field></div>
+      <Field label="PERMIT TO USE (PTU) NO."><input value={draft.permitNumber} onChange={(e) => set('permitNumber', e.target.value)} /></Field>
+      <Field label="RECEIPT HEADER MESSAGE"><input value={draft.receiptHeader} onChange={(e) => set('receiptHeader', e.target.value)} /></Field>
+      <Field label="RECEIPT FOOTER"><textarea value={draft.receiptFooter} onChange={(e) => set('receiptFooter', e.target.value)} /></Field>
+    </>}
+    {section === 'Payment methods' && <>
+      <h2>Payment methods</h2><p>Choose which tenders appear at checkout.</p>
+      <div className="toggle-list">{(Object.keys(draft.payments) as PaymentMethod[]).map((m) => <label className="toggle-row" key={m}><div><b>{m}</b><small>{m === 'Cash' ? 'Calculates change automatically' : m === 'Card' ? 'Approval code required' : 'Reference number required'}</small></div><input type="checkbox" checked={draft.payments[m]} disabled={m === 'Cash'} onChange={(e) => set('payments', { ...draft.payments, [m]: e.target.checked })} /></label>)}</div>
+    </>}
+    {section === 'Inventory & AI' && <>
+      <h2>Inventory &amp; AI forecasting</h2><p>Controls how demand forecasts turn into reorder suggestions and expiry alerts.</p>
+      <Field label="DEFAULT FORECAST METHOD"><Segmented label="Forecast method" options={['WMA', 'SES', 'Holt'] as const} value={draft.forecastMethod} onChange={(m: ForecastMethod) => set('forecastMethod', m)} /></Field>
+      <div className="form-row">
+        <Field label="SERVICE LEVEL" hint="Higher = more safety stock, fewer stock-outs"><select value={draft.serviceLevel} onChange={(e) => set('serviceLevel', Number(e.target.value))}>{[0.8, 0.9, 0.95, 0.975, 0.99].map((v) => <option key={v} value={v}>{(v * 100).toFixed(1).replace('.0', '')}%</option>)}</select></Field>
+        <Field label="TARGET DAYS OF COVER" hint="Stock to hold after the lead time"><input type="number" min={1} max={60} value={draft.coverDays} onChange={(e) => set('coverDays', Number(e.target.value))} /></Field>
+      </div>
+      <div className="form-row">
+        <Field label="EXPIRY WARNING (DAYS)"><input type="number" min={1} max={60} value={draft.expiryWarningDays} onChange={(e) => set('expiryWarningDays', Number(e.target.value))} /></Field>
+        <Field label="SMOOTHING α (SES / HOLT)"><input type="number" min={0.05} max={0.95} step={0.05} value={draft.sesAlpha} onChange={(e) => set('sesAlpha', Number(e.target.value))} /></Field>
+      </div>
+      <Field label="WMA WEIGHTS (MOST RECENT FIRST)" hint="Weights are normalised automatically."><div className="form-row">{draft.wmaWeights.map((w, i) => <input key={i} type="number" min={0} max={1} step={0.05} value={w} aria-label={`Weight ${i + 1}`} onChange={(e) => set('wmaWeights', draft.wmaWeights.map((x, j) => (j === i ? Number(e.target.value) : x)))} />)}
+        <button className="outline-button" onClick={() => set('wmaWeights', draft.wmaWeights.length < 4 ? [...draft.wmaWeights, 0.1] : draft.wmaWeights.slice(0, 2))}>{draft.wmaWeights.length < 4 ? '＋ WEEK' : '− WEEKS'}</button></div></Field>
+    </>}
+    {section === 'Notifications' && <>
+      <h2>Notifications</h2><p>Choose which alerts appear on the dashboard and in the AI insights feed.</p>
+      <div className="toggle-list">{([['lowStock', 'Low-stock & stock-out predictions'], ['expiry', 'Near-expiry stock'], ['requests', 'New customer requests'], ['aiDigest', 'Daily AI digest at opening'], ['shiftReminder', 'Cash count reminders']] as [keyof Settings['notifications'], string][]).map(([key, label]) => <label className="toggle-row" key={key}><div><b>{label}</b></div><input type="checkbox" checked={draft.notifications[key]} onChange={(e) => set('notifications', { ...draft.notifications, [key]: e.target.checked })} /></label>)}</div>
+    </>}
+    {section === 'Access & roles' && <>
+      <h2>Access &amp; roles</h2><p>Which workspaces each role can open. Owners always have full access.</p>
+      <div className="data-table-wrap"><table className="data-table permission-table"><thead><tr><th>WORKSPACE</th>{(['Owner', 'Cashier', 'Inventory Clerk'] as Role[]).map((r) => <th key={r}>{r.toUpperCase()}</th>)}</tr></thead><tbody>
+        {allWorkspaces.map((w) => <tr key={w}><td><b>{w}</b></td>{(['Owner', 'Cashier', 'Inventory Clerk'] as Role[]).map((r) => <td key={r}><input type="checkbox" aria-label={`${r} can open ${w}`} disabled={r === 'Owner' || w === 'Dashboard'} checked={draft.rolePermissions[r].includes(w)} onChange={(e) => set('rolePermissions', { ...draft.rolePermissions, [r]: e.target.checked ? allWorkspaces.filter((x) => x === w || draft.rolePermissions[r].includes(x)) : draft.rolePermissions[r].filter((x) => x !== w) })} /></td>)}</tr>)}
+      </tbody></table></div>
+    </>}
+    {section === 'Data' && <>
+      <h2>Demo data</h2><p>This prototype runs on a generated dataset stored in your browser. Resetting restores the original products, 12 weeks of sales history and receipts.</p>
+      <button className="danger-button" disabled={readOnly} onClick={() => setConfirmReset(true)}>RESET DEMO DATA</button>
+    </>}
+    {section !== 'Data' && <div className="form-actions"><span>{readOnly ? 'VIEW ONLY · OWNER ACCESS REQUIRED' : dirty ? 'UNSAVED CHANGES' : 'ALL CHANGES SAVED'}</span><div>{dirty && <button className="outline-button" onClick={() => setDraft(state.settings)}>DISCARD</button>}<button className="primary-button" disabled={!dirty || readOnly} onClick={save}>SAVE CHANGES</button></div></div>}
+    {confirmReset && <Modal title="Reset demo data?" eyebrow="DATA" onClose={() => setConfirmReset(false)} footer={<><button className="outline-button" onClick={() => setConfirmReset(false)}>CANCEL</button><button className="danger-button" onClick={() => { actions.resetDemo(); setConfirmReset(false); actions.toast('Demo data reset', 'info') }}>RESET</button></>}><p className="muted-text">All sales, stock changes, waste entries and purchase orders made in this browser will be replaced. Employees and settings are kept.</p></Modal>}
+  </div>
+}

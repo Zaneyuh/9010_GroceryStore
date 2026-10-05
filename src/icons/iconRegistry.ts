@@ -1,15 +1,22 @@
-export const iconRegistry = {
+export const iconRegistry: { brandMark: string; editors: Record<string, string>; shortcuts: Record<string, string> } = {
   brandMark: '9',
   editors: {
     Dashboard: '▦',
     'Product Grid': '▤',
     Cart: '▣',
+    Transactions: '≡',
+    'Returns & Refunds': '↺',
+    'Shift & Cash Drawer': '₱',
     'Inventory Metrics': '◫',
     'Inventory Table': '▤',
+    Purchasing: '↗',
+    'Purchase Orders': '☰',
+    'Waste Log': '⌁',
+    'AI Insights': '✦',
     'WMA Forecast': '⌁',
     'Model Explanation': '∑',
-    Purchasing: '↗',
-    'Waste Log': '⌁',
+    'Trend Analysis': '↗',
+    'Basket Analysis': '⊕',
     'Customer Requests': '☷',
     Employees: '♙',
     Reports: '▥',
@@ -19,8 +26,9 @@ export const iconRegistry = {
   shortcuts: {
     'Point of Sale': '↗',
     Inventory: '▤',
-    'Insights & Reports': '▥',
+    'AI Insights': '✦',
     Waste: '⌁',
+    Reports: '▥',
     Settings: '⚙',
   },
 }
