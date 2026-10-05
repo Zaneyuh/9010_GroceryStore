@@ -55,12 +55,18 @@ function replacePanel(node: LayoutNode, id: string, editor: Editor): LayoutNode 
   return updateNode(node, id, (item) => item.type === 'panel' ? { ...item, editor } : item)
 }
 
-function splitPanel(node: LayoutNode, id: string, direction: Direction, after: boolean, editor: Editor): LayoutNode {
+function splitPanel(node: LayoutNode, id: string, direction: Direction, after: boolean, ratio = 0.5, editor?: Editor): LayoutNode {
   return updateNode(node, id, (item) => {
     if (item.type !== 'panel') return item
-    const freshPanel = makePanel(editor)
-    return makeSplit(direction, after ? item : freshPanel, after ? freshPanel : item)
+    const freshPanel = makePanel(editor ?? item.editor)
+    return makeSplit(direction, after ? item : freshPanel, after ? freshPanel : item, ratio)
   })
+}
+
+function splitRatioAtPointer(direction: Direction, bounds: DOMRect, clientX: number, clientY: number) {
+  const position = direction === 'horizontal' ? clientX - bounds.left : clientY - bounds.top
+  const dimension = direction === 'horizontal' ? bounds.width : bounds.height
+  return Math.max(0.005, Math.min(0.995, position / dimension))
 }
 
 function collapseSplit(node: LayoutNode, id: string, keep: 'first' | 'second'): LayoutNode {
@@ -74,11 +80,72 @@ function editorForPanel(node: LayoutNode, id: string): Editor | undefined {
   return editorForPanel(node.first, id) ?? editorForPanel(node.second, id)
 }
 
-function removePanelAndCollapse(node: LayoutNode, id: string): LayoutNode {
-  if (node.type === 'panel') return node
-  if (node.first.type === 'panel' && node.first.id === id) return node.second
-  if (node.second.type === 'panel' && node.second.id === id) return node.first
-  return { ...node, first: removePanelAndCollapse(node.first, id), second: removePanelAndCollapse(node.second, id) }
+type PanelNode = Extract<LayoutNode, { type: 'panel' }>
+interface PanelRect { panel: PanelNode; x0: number; y0: number; x1: number; y1: number }
+
+const edgeTolerance = 0.006
+
+function collectPanelRects(node: LayoutNode, x0 = 0, y0 = 0, x1 = 1, y1 = 1, rects: PanelRect[] = []): PanelRect[] {
+  if (node.type === 'panel') {
+    rects.push({ panel: node, x0, y0, x1, y1 })
+  } else if (node.direction === 'horizontal') {
+    const cut = x0 + (x1 - x0) * node.ratio
+    collectPanelRects(node.first, x0, y0, cut, y1, rects)
+    collectPanelRects(node.second, cut, y0, x1, y1, rects)
+  } else {
+    const cut = y0 + (y1 - y0) * node.ratio
+    collectPanelRects(node.first, x0, y0, x1, cut, rects)
+    collectPanelRects(node.second, x0, cut, x1, y1, rects)
+  }
+  return rects
+}
+
+function buildLayoutFromRects(rects: PanelRect[], x0: number, y0: number, x1: number, y1: number): LayoutNode | undefined {
+  if (rects.length === 1) return rects[0].panel
+  for (const cut of new Set(rects.map((rect) => rect.x1).filter((x) => x < x1 - edgeTolerance))) {
+    const first = rects.filter((rect) => rect.x1 <= cut + edgeTolerance)
+    const second = rects.filter((rect) => rect.x0 >= cut - edgeTolerance)
+    if (first.length === 0 || first.length + second.length !== rects.length) continue
+    const firstNode = buildLayoutFromRects(first, x0, y0, cut, y1)
+    const secondNode = buildLayoutFromRects(second, cut, y0, x1, y1)
+    if (firstNode && secondNode) return makeSplit('horizontal', firstNode, secondNode, (cut - x0) / (x1 - x0))
+  }
+  for (const cut of new Set(rects.map((rect) => rect.y1).filter((y) => y < y1 - edgeTolerance))) {
+    const first = rects.filter((rect) => rect.y1 <= cut + edgeTolerance)
+    const second = rects.filter((rect) => rect.y0 >= cut - edgeTolerance)
+    if (first.length === 0 || first.length + second.length !== rects.length) continue
+    const firstNode = buildLayoutFromRects(first, x0, y0, x1, cut)
+    const secondNode = buildLayoutFromRects(second, x0, cut, x1, y1)
+    if (firstNode && secondNode) return makeSplit('vertical', firstNode, secondNode, (cut - y0) / (y1 - y0))
+  }
+  return undefined
+}
+
+// The target is absorbed only when the panels bordering it on the source's side
+// start and end exactly where the target does (their gutters line up with its edges).
+function joinPanels(layout: LayoutNode, sourceId: string, targetId: string): LayoutNode | undefined {
+  const rects = collectPanelRects(layout)
+  const source = rects.find((rect) => rect.panel.id === sourceId)
+  const target = rects.find((rect) => rect.panel.id === targetId)
+  if (!source || !target) return undefined
+  const near = (a: number, b: number) => Math.abs(a - b) < edgeTolerance
+  const overlapsY = (rect: PanelRect) => rect.y0 < target.y1 - edgeTolerance && rect.y1 > target.y0 + edgeTolerance
+  const overlapsX = (rect: PanelRect) => rect.x0 < target.x1 - edgeTolerance && rect.x1 > target.x0 + edgeTolerance
+  const sides = [
+    { touches: (rect: PanelRect) => near(rect.x1, target.x0) && overlapsY(rect), vertical: true, grow: (rect: PanelRect) => ({ ...rect, x1: target.x1 }) },
+    { touches: (rect: PanelRect) => near(rect.x0, target.x1) && overlapsY(rect), vertical: true, grow: (rect: PanelRect) => ({ ...rect, x0: target.x0 }) },
+    { touches: (rect: PanelRect) => near(rect.y1, target.y0) && overlapsX(rect), vertical: false, grow: (rect: PanelRect) => ({ ...rect, y1: target.y1 }) },
+    { touches: (rect: PanelRect) => near(rect.y0, target.y1) && overlapsX(rect), vertical: false, grow: (rect: PanelRect) => ({ ...rect, y0: target.y0 }) },
+  ]
+  const side = sides.find((candidate) => candidate.touches(source))
+  if (!side) return undefined
+  const neighbours = rects.filter((rect) => rect !== target && side.touches(rect))
+  const aligned = side.vertical
+    ? near(Math.min(...neighbours.map((rect) => rect.y0)), target.y0) && near(Math.max(...neighbours.map((rect) => rect.y1)), target.y1)
+    : near(Math.min(...neighbours.map((rect) => rect.x0)), target.x0) && near(Math.max(...neighbours.map((rect) => rect.x1)), target.x1)
+  if (!aligned) return undefined
+  const remaining = rects.filter((rect) => rect !== target).map((rect) => neighbours.includes(rect) ? side.grow(rect) : rect)
+  return buildLayoutFromRects(remaining, 0, 0, 1, 1)
 }
 
 function swapPanelEditors(node: LayoutNode, firstId: string, secondId: string): LayoutNode {
@@ -105,10 +172,31 @@ interface SplitDrag {
   x: number
   y: number
   ctrlKey: boolean
+  gestureDirection?: Direction
+  axisAnchorX: number
+  axisAnchorY: number
+  joinDirection?: 'left' | 'right' | 'up' | 'down'
+  joinBlocked?: boolean
   targetId?: string
-  edge?: 'left' | 'right' | 'top' | 'bottom'
   ghost?: { left: number; top: number; width: number; height: number }
   targetRect?: { left: number; top: number; width: number; height: number }
+  sourceCenter?: { left: number; top: number }
+}
+
+function classifySplitDirection(dx: number, dy: number): Direction | undefined {
+  const horizontalTravel = Math.abs(dx)
+  const verticalTravel = Math.abs(dy)
+  const minimumTravel = 12
+  const axisMargin = 1.2
+
+  if (Math.max(horizontalTravel, verticalTravel) < minimumTravel) return undefined
+  if (horizontalTravel >= verticalTravel * axisMargin) return 'horizontal'
+  if (verticalTravel >= horizontalTravel * axisMargin) return 'vertical'
+  return undefined
+}
+
+function resolveSplitDirection(dx: number, dy: number, previous?: Direction): Direction {
+  return previous ?? classifySplitDirection(dx, dy) ?? (Math.abs(dx) >= Math.abs(dy) ? 'horizontal' : 'vertical')
 }
 
 function Workspace() {
@@ -148,34 +236,79 @@ function Workspace() {
   function beginSplitDrag(event: PointerEvent<HTMLButtonElement>, panelId: string) {
     event.preventDefault()
     event.stopPropagation()
-    setSplitDrag({ panelId, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, ctrlKey: event.ctrlKey })
+    setSplitDrag({ panelId, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, ctrlKey: event.ctrlKey, axisAnchorX: event.clientX, axisAnchorY: event.clientY })
   }
 
   function onWorkspacePointerMove(event: PointerEvent<HTMLDivElement>) {
     if (!splitDrag || splitDrag.pointerId !== event.pointerId) return
     const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-area-id]')
     const bounds = target?.getBoundingClientRect()
-    let edge: SplitDrag['edge']
+    const movementX = event.clientX - splitDrag.startX
+    const movementY = event.clientY - splitDrag.startY
+    let gestureDirection = splitDrag.gestureDirection
+    let axisAnchorX = splitDrag.axisAnchorX
+    let axisAnchorY = splitDrag.axisAnchorY
+    if (!gestureDirection) {
+      gestureDirection = classifySplitDirection(movementX, movementY)
+      if (gestureDirection) {
+        axisAnchorX = event.clientX
+        axisAnchorY = event.clientY
+      }
+    } else {
+      const sinceLockX = Math.abs(event.clientX - axisAnchorX)
+      const sinceLockY = Math.abs(event.clientY - axisAnchorY)
+      const perpendicularTravel = gestureDirection === 'horizontal' ? sinceLockY : sinceLockX
+      if (perpendicularTravel >= 36) {
+        gestureDirection = gestureDirection === 'horizontal' ? 'vertical' : 'horizontal'
+        axisAnchorX = event.clientX
+        axisAnchorY = event.clientY
+      }
+    }
     let ghost: SplitDrag['ghost']
+    let joinDirection: SplitDrag['joinDirection']
+    let sourceCenter: SplitDrag['sourceCenter']
+    let targetPreviewRect: SplitDrag['targetRect']
+    const ctrlKey = splitDrag.ctrlKey || event.ctrlKey
+    const joinBlocked = !ctrlKey && !!target?.dataset.areaId && target.dataset.areaId !== splitDrag.panelId && !joinPanels(layout, splitDrag.panelId, target.dataset.areaId)
     if (target && bounds) {
-      const x = (event.clientX - bounds.left) / bounds.width
-      const y = (event.clientY - bounds.top) / bounds.height
-      const distances = [x, 1 - x, y, 1 - y]
-      const nearest = distances.indexOf(Math.min(...distances))
-      edge = (['left', 'right', 'top', 'bottom'] as const)[nearest]
-      ghost = edge === 'left' || edge === 'right'
-        ? { left: event.clientX, top: bounds.top, width: 2, height: bounds.height }
-        : { left: bounds.left, top: event.clientY, width: bounds.width, height: 2 }
+      if (target.dataset.areaId === splitDrag.panelId && gestureDirection) {
+        const ratio = splitRatioAtPointer(gestureDirection, bounds, event.clientX, event.clientY)
+        ghost = gestureDirection === 'horizontal'
+          ? { left: bounds.left + bounds.width * ratio, top: bounds.top, width: 2, height: bounds.height }
+          : { left: bounds.left, top: bounds.top + bounds.height * ratio, width: bounds.width, height: 2 }
+      } else if (target.dataset.areaId !== splitDrag.panelId) {
+        const source = document.querySelector<HTMLElement>(`[data-area-id="${splitDrag.panelId}"]`)
+        if (source) {
+          const sourceBounds = source.getBoundingClientRect()
+          const preview = { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height }
+          targetPreviewRect = preview
+          const centerX = preview.left + preview.width / 2
+          const centerY = preview.top + preview.height / 2
+          const sourceX = sourceBounds.left + sourceBounds.width / 2
+          const sourceY = sourceBounds.top + sourceBounds.height / 2
+          const deltaX = centerX - sourceX
+          const deltaY = centerY - sourceY
+          sourceCenter = { left: sourceX, top: sourceY }
+          joinDirection = Math.abs(deltaX) >= Math.abs(deltaY)
+            ? deltaX < 0 ? 'left' : 'right'
+            : deltaY < 0 ? 'up' : 'down'
+        }
+      }
     }
     setSplitDrag({
       ...splitDrag,
       x: event.clientX,
       y: event.clientY,
-      ctrlKey: splitDrag.ctrlKey || event.ctrlKey,
+      ctrlKey,
+      gestureDirection,
+      axisAnchorX,
+      axisAnchorY,
+      joinDirection,
+      joinBlocked,
       targetId: target?.dataset.areaId,
-      edge,
       ghost,
-      targetRect: bounds ? { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height } : undefined,
+      targetRect: targetPreviewRect ?? (bounds ? { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height } : undefined),
+      sourceCenter,
     })
   }
 
@@ -188,20 +321,20 @@ function Workspace() {
       if (targetId) {
         if (targetId !== splitDrag.panelId) {
           const source = document.querySelector<HTMLElement>(`[data-area-id="${splitDrag.panelId}"]`)
-          if (source && areasAreAdjacent(source.getBoundingClientRect(), target.getBoundingClientRect())) {
-            setLayout((current) => splitDrag.ctrlKey || event.ctrlKey
-              ? swapPanelEditors(current, splitDrag.panelId, targetId)
-              : removePanelAndCollapse(current, splitDrag.panelId))
+          const swapping = splitDrag.ctrlKey || event.ctrlKey
+          if (swapping && source && areasAreAdjacent(source.getBoundingClientRect(), target.getBoundingClientRect())) {
+            setLayout((current) => swapPanelEditors(current, splitDrag.panelId, targetId))
+          } else if (!swapping) {
+            const joined = joinPanels(layout, splitDrag.panelId, targetId)
+            if (joined) setLayout(joined)
           }
         } else {
-          const bounds = target.getBoundingClientRect()
-          const x = (event.clientX - bounds.left) / bounds.width
-          const y = (event.clientY - bounds.top) / bounds.height
-          const distances = [x, 1 - x, y, 1 - y]
-          const nearest = distances.indexOf(Math.min(...distances))
-          const direction: Direction = nearest < 2 ? 'horizontal' : 'vertical'
-          const after = nearest === 1 || nearest === 3
-          setLayout((current) => splitPanel(current, targetId, direction, after, splitEditorFor(activeWorkspace)))
+          const dx = event.clientX - splitDrag.startX
+          const dy = event.clientY - splitDrag.startY
+          const direction = resolveSplitDirection(dx, dy, splitDrag.gestureDirection)
+          const after = true
+          const ratio = splitRatioAtPointer(direction, target.getBoundingClientRect(), event.clientX, event.clientY)
+          setLayout((current) => splitPanel(current, targetId, direction, after, ratio))
         }
       }
     }
@@ -239,11 +372,12 @@ function Workspace() {
           onSplitDrag={beginSplitDrag}
           onResizeStart={() => setDragging(true)}
           onResizeEnd={() => setDragging(false)}
-          onGutterSplit={(targetId, direction, after) => setLayout((current) => splitPanel(current, targetId, direction, after, splitEditorFor(activeWorkspace)))}
+          onGutterSplit={(targetId, direction, after) => setLayout((current) => splitPanel(current, targetId, direction, after))}
           splitDrag={splitDrag}
         />
         {splitDrag?.ghost && <div className="split-ghost" style={splitDrag.ghost} />}
-        {splitDrag?.targetRect && splitDrag.targetId !== splitDrag.panelId && <div className={splitDrag.ctrlKey ? 'area-drop-overlay swap-preview' : 'area-drop-overlay'} style={splitDrag.targetRect} aria-hidden="true"><span>{splitDrag.ctrlKey ? '↔' : '←'}</span></div>}
+        {splitDrag?.targetRect && splitDrag.targetId !== splitDrag.panelId && <div className={splitDrag.ctrlKey ? 'area-drop-overlay swap-preview' : splitDrag.joinBlocked ? 'area-drop-overlay join-blocked' : 'area-drop-overlay'} style={splitDrag.targetRect} aria-hidden="true" />}
+        {splitDrag?.sourceCenter && splitDrag.joinDirection && <div className={splitDrag.ctrlKey ? 'join-direction-indicator swap-preview' : splitDrag.joinBlocked ? 'join-direction-indicator join-blocked' : 'join-direction-indicator'} style={splitDrag.sourceCenter} aria-hidden="true"><span>{splitDrag.ctrlKey ? '↔' : splitDrag.joinBlocked ? '⊘' : ({ left: '←', right: '→', up: '↑', down: '↓' })[splitDrag.joinDirection]}</span></div>}
       </section>
 
       <StatusBar />
@@ -306,7 +440,7 @@ interface LayoutViewProps {
 
 function LayoutView({ node, onLayoutChange, onEditorChange, onSplitDrag, onResizeStart, onResizeEnd, onGutterSplit, splitDrag }: LayoutViewProps) {
   if (node.type === 'panel') {
-    const highlighted = splitDrag?.targetId === node.id && Math.hypot(splitDrag.x - splitDrag.startX, splitDrag.y - splitDrag.startY) > 12
+    const highlighted = splitDrag?.panelId === node.id && splitDrag.targetId === node.id && Math.hypot(splitDrag.x - splitDrag.startX, splitDrag.y - splitDrag.startY) > 12
     return (
       <article className={`workspace-area${highlighted ? ' split-target' : ''}`} data-area-id={node.id}>
         <AreaPanel node={node} onEditorChange={onEditorChange} onSplitDrag={onSplitDrag} />
