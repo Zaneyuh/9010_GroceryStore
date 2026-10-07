@@ -56,7 +56,7 @@ function Login() {
       <div className={error ? 'pin-dots error' : 'pin-dots'} aria-label={`${pin.length} of 4 digits entered`}>{[0, 1, 2, 3].map((i) => <i key={i} className={i < pin.length ? 'filled' : ''} />)}</div>
       <p className="pin-caption">{error ? 'Incorrect PIN. Try again.' : `Enter ${selected?.name.split(' ')[0] ?? 'your'}’s 4-digit PIN`}</p>
       <div className="pin-pad">{['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((d) => <button key={d} onClick={() => press(d)}>{d}</button>)}<button onClick={() => setPin('')}>CLR</button><button onClick={() => press('0')}>0</button><button onClick={() => setPin((p) => p.slice(0, -1))} aria-label="Delete digit">⌫</button></div>
-      <p className="demo-hint">Demo PINs · Owner 1234 · Cashier 1111 · Inventory 2222</p>
+      <p className="demo-hint">Demo PIN for everyone · 0000</p>
     </section>
   </main>
 }

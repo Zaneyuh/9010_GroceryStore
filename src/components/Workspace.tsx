@@ -391,6 +391,11 @@ function AccountMenu() {
   const user = useCurrentUser()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -408,7 +413,7 @@ function AccountMenu() {
 
   return <div className="account-menu-wrap" ref={menuRef}>
     <button className="account-context" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)} onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false) }}>
-      <span className="account-clock">{shiftOpen ? 'SHIFT OPEN' : 'SHIFT CLOSED'} <b>{time(state.shift.openedAt)}</b></span><span className="avatar">{initials(user.name)}</span><span className="account-person">{user.name.split(' ')[0]} {user.name.split(' ')[1]?.[0] ?? ''}.<small>{user.role.toUpperCase()}</small></span><span className="account-caret">⌄</span>
+      <span className="account-clock">{shiftOpen ? `REGISTER OPENED ${time(state.shift.openedAt)}` : 'REGISTER CLOSED'} <b>{time(now)}</b></span>
     </button>
     {open && <div className="account-dropdown" role="menu" aria-label="Account menu">
       <div className="account-menu-profile"><span className="avatar">{initials(user.name)}</span><div><b>{user.name}</b><small>{user.role.toUpperCase()} · {user.role === 'Owner' ? 'FULL ACCESS' : `${state.settings.rolePermissions[user.role].length} WORKSPACES`}</small></div></div>
@@ -609,17 +614,12 @@ function EditorContent({ editor }: { editor: Editor }) {
 function StatusBar() {
   const { state } = useStore()
   const { insights } = useAnalytics()
-  const [now, setNow] = useState(() => new Date())
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 30_000)
-    return () => window.clearInterval(timer)
-  }, [])
   const critical = insights.filter((i) => i.severity === 'critical').length
   return <footer className="status-bar">
     <span><i className="status-online" /> LOCAL MODE</span>
     <span>DEMO DATA <b>•</b> {state.transactions.length} RECEIPTS <b>•</b> AI MODEL {state.settings.forecastMethod}</span>
     {critical > 0 && <span className="status-alert">{critical} CRITICAL ALERT{critical > 1 ? 'S' : ''}</span>}
-    <span className="status-right">{time(now)} <b>·</b> 9010 GROCERY <b>v1.1.0</b></span>
+    <span className="status-right">9010 GROCERY <b>v1.1.0</b></span>
   </footer>
 }
 

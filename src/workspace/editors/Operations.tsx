@@ -115,7 +115,7 @@ export function EmployeesPanel() {
 function EmployeeModal({ employee, isNew, onClose, onSave }: { employee: Employee; isNew: boolean; onClose: () => void; onSave: (e: Employee) => void }) {
   const { state } = useStore()
   const [draft, setDraft] = useState(employee)
-  const pinTaken = state.employees.some((e) => e.id !== draft.id && e.pin === draft.pin)
+  const pinTaken = false
   const valid = draft.name.trim() && /^\d{4}$/.test(draft.pin) && !pinTaken
   return <Modal title={isNew ? 'Add employee' : draft.name} eyebrow="TEAM MEMBER" onClose={onClose} footer={<><button className="outline-button" onClick={onClose}>CANCEL</button><button className="primary-button" disabled={!valid} onClick={() => onSave(draft)}>SAVE</button></>}>
     <div className="form-grid">

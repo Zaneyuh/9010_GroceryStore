@@ -84,11 +84,11 @@ const hourWeights = [0, 0, 0, 0, 0, 0, 0, 3, 6, 5, 3, 4, 6, 5, 3, 3, 4, 6, 7, 5,
 const BASE_TXNS_PER_DAY = 92
 
 export const employees: Employee[] = [
-  { id: 'e1', name: 'John Doe', email: 'john.doe@9010.store', role: 'Owner', pin: '1234', status: 'Active', lastActive: new Date().toISOString() },
-  { id: 'e2', name: 'Maria Santos', email: 'm.santos@9010.store', role: 'Cashier', pin: '1111', status: 'Active', lastActive: new Date().toISOString() },
-  { id: 'e3', name: 'Rafael Cruz', email: 'r.cruz@9010.store', role: 'Inventory Clerk', pin: '2222', status: 'Active', lastActive: new Date().toISOString() },
-  { id: 'e4', name: 'Ana Reyes', email: 'a.reyes@9010.store', role: 'Cashier', pin: '3333', status: 'On leave', lastActive: new Date(Date.now() - DAY_MS).toISOString() },
-  { id: 'e5', name: 'Paolo Lim', email: 'p.lim@9010.store', role: 'Cashier', pin: '4444', status: 'Active', lastActive: new Date().toISOString() },
+  { id: 'e1', name: 'John Doe', email: 'john.doe@9010.store', role: 'Owner', pin: '0000', status: 'Active', lastActive: new Date().toISOString() },
+  { id: 'e2', name: 'Maria Santos', email: 'm.santos@9010.store', role: 'Cashier', pin: '0000', status: 'Active', lastActive: new Date().toISOString() },
+  { id: 'e3', name: 'Rafael Cruz', email: 'r.cruz@9010.store', role: 'Inventory Clerk', pin: '0000', status: 'Active', lastActive: new Date().toISOString() },
+  { id: 'e4', name: 'Ana Reyes', email: 'a.reyes@9010.store', role: 'Cashier', pin: '0000', status: 'On leave', lastActive: new Date(Date.now() - DAY_MS).toISOString() },
+  { id: 'e5', name: 'Paolo Lim', email: 'p.lim@9010.store', role: 'Cashier', pin: '0000', status: 'Active', lastActive: new Date().toISOString() },
 ]
 
 export const allWorkspaces: Settings['rolePermissions']['Owner'] = ['Dashboard', 'Point of Sale', 'Transactions', 'Inventory', 'Purchasing', 'AI Insights', 'Reports', 'Waste', 'Requests', 'Employees', 'Settings']
