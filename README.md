@@ -1,31 +1,44 @@
-# 9010 Grocery Store — POS
+# 9010 Grocery Store
 
-Electron + React + TypeScript + Vite + Tailwind CSS.
+An offline point-of-sale and store management system for a small grocery. One **server PC** holds the
+database; **cashier PCs** connect to it over the store network. Includes sales, inventory, waste, customer
+requests, reports, AI demand forecasting, and importing data from an old system.
 
-## Setup
-```
-npm install
-```
+Built with Electron, React, TypeScript, Node.js/Express, MySQL and a Python ML service.
 
-## Run in dev (browser only, fastest feedback loop)
-```
-npm run dev
-```
-Opens at http://localhost:5173
+> Not a PHP project: don't put it in XAMPP's `htdocs`. From XAMPP you only need **MySQL**.
 
-## Run in dev (inside the Electron window)
-```
-npm run electron:dev
-```
-This starts the Vite dev server and opens the Electron window pointed at it, with hot reload.
+## Start the app
 
-## Build a production desktop app
-```
-npm run electron:build
-```
-Outputs installers to /release.
+You need **Node.js 20+** and **MySQL** (XAMPP is fine). Python 3.11/3.12 is only needed for the AI features.
 
-## Project structure
-- `src/components/` — screen components (CashierMainMenu.tsx, more to come)
-- `src/App.tsx` — currently renders CashierMainMenu directly; swap this for a router as more screens are added
-- `main.js` — Electron's entry point (creates the app window)
+1. **Start MySQL** (XAMPP Control Panel → MySQL → Start).
+2. **Create `.env`**: copy `.env.example` to `.env` and set `DB_PASSWORD`.
+3. **Create the database user**: put the same password in `database/create-db-user.sql`, then run
+   ```
+   C:\xampp\mysql\bin\mysql.exe -u root < database/create-db-user.sql
+   ```
+4. **Install and run**:
+   ```
+   npm install
+   npm run db:init
+   npm run electron:dev
+   ```
+
+## First sign-in
+
+Choose **I am the owner** and sign in with username **`admin`** and PIN **`000000`**. You'll be taken to
+**Settings → My account** to set your own name, username and PIN; after that, only your new details work.
+
+Cashiers don't sign in: the owner assigns them to a register from **Admin Station**.
+
+## Useful commands
+
+| Command | What it does |
+|---|---|
+| `npm run electron:dev` | Run the desktop app (starts the server too) |
+| `npm run db:reset` | Wipe the database and start over with `admin` / `000000` |
+| `npm run ml:install` | Install the Python packages for AI forecasting |
+
+**Something not working?** See the full guide: [docs/GUIDE.md](docs/GUIDE.md) (setup details, cashier
+registers, importing data, troubleshooting, project structure).

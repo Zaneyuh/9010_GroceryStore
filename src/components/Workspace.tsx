@@ -1,50 +1,20 @@
 import { useEffect, useRef, useState, type PointerEvent } from 'react'
 import { createPortal } from 'react-dom'
+import { Navigate, useNavigate } from 'react-router-dom'
+import type { WorkspaceName } from '../data/types'
 import { iconRegistry } from '../icons/iconRegistry'
-
-type Editor =
-  | 'Dashboard'
-  | 'Product Grid'
-  | 'Cart'
-  | 'Inventory Metrics'
-  | 'Inventory Table'
-  | 'WMA Forecast'
-  | 'Model Explanation'
-  | 'Purchasing'
-  | 'Waste Log'
-  | 'Customer Requests'
-  | 'Employees'
-  | 'Reports'
-  | 'Settings Navigation'
-  | 'Business Settings'
+import { initials, time } from '../lib/format'
+import { useAuth } from '../context/AuthContext'
+import { useTerminal } from '../context/TerminalContext'
+import { allowedWorkspaces, useAnalytics, useCurrentUser, useStore } from '../store/StoreContext'
+import { editorGroups, editors, editorWorkspaces, type Editor } from '../workspace/editors'
+import { Toasts } from '../workspace/ui'
+import { useHorizontalScroll } from '../hooks/useHorizontalScroll'
 
 type Direction = 'horizontal' | 'vertical'
 type LayoutNode =
   | { type: 'panel'; id: string; editor: Editor }
   | { type: 'split'; id: string; direction: Direction; ratio: number; first: LayoutNode; second: LayoutNode }
-
-interface Product {
-  name: string
-  category: string
-  price: number
-  stock: number
-  color: string
-  symbol: string
-}
-
-interface CartItem {
-  product: Product
-  quantity: number
-}
-
-type WorkspaceName = 'Dashboard' | 'Point of Sale' | 'Inventory' | 'Insights & Reports' | 'Waste' | 'Requests' | 'Employees' | 'Settings'
-
-const editorGroups: { category: string; items: Editor[] }[] = [
-  { category: 'General', items: ['Dashboard', 'Product Grid', 'Cart', 'Inventory Metrics', 'Inventory Table', 'Reports'] },
-  { category: 'Animation', items: ['WMA Forecast'] },
-  { category: 'Scripting', items: ['Purchasing', 'Waste Log', 'Customer Requests', 'Employees'] },
-  { category: 'Data', items: ['Model Explanation', 'Settings Navigation', 'Business Settings'] },
-]
 
 const makePanel = (editor: Editor): LayoutNode => ({ type: 'panel', id: crypto.randomUUID(), editor })
 const makeSplit = (direction: Direction, first: LayoutNode, second: LayoutNode, ratio = 0.5): LayoutNode => ({
@@ -53,13 +23,16 @@ const makeSplit = (direction: Direction, first: LayoutNode, second: LayoutNode, 
 
 function defaultLayout(workspace: WorkspaceName): LayoutNode {
   switch (workspace) {
-    case 'Point of Sale': return makeSplit('horizontal', makePanel('Product Grid'), makePanel('Cart'), 0.8)
+    case 'Admin Station': return makeSplit('horizontal', makePanel('Admin Station'), makePanel('Employees'), 0.6)
+    case 'Point of Sale': return makeSplit('horizontal', makePanel('Product Grid'), makePanel('Cart'), 0.64)
+    case 'Transactions': return makeSplit('horizontal', makePanel('Transactions'), makeSplit('vertical', makePanel('Returns & Refunds'), makePanel('Shift & Cash Drawer'), 0.6), 0.6)
     case 'Inventory': return makeSplit('horizontal', makeSplit('vertical', makePanel('Inventory Metrics'), makePanel('Purchasing'), 0.3), makePanel('Inventory Table'), 0.45)
-    case 'Insights & Reports': return makeSplit('horizontal', makeSplit('vertical', makePanel('WMA Forecast'), makePanel('Model Explanation'), 0.55), makePanel('Reports'), 0.55)
+    case 'Purchasing': return makeSplit('horizontal', makePanel('Purchasing'), makePanel('Purchase Orders'), 0.58)
+    case 'AI Insights': return makeSplit('horizontal', makeSplit('vertical', makePanel('WMA Forecast'), makePanel('Trend Analysis'), 0.52), makeSplit('vertical', makePanel('AI Insights'), makePanel('Model Explanation'), 0.5), 0.58)
+    case 'Reports': return makeSplit('horizontal', makePanel('Reports'), makePanel('Basket Analysis'), 0.55)
     case 'Waste': return makePanel('Waste Log')
     case 'Requests': return makePanel('Customer Requests')
-    case 'Employees': return makePanel('Employees')
-    case 'Settings': return makeSplit('horizontal', makePanel('Settings Navigation'), makePanel('Business Settings'))
+    case 'Settings': return makeSplit('horizontal', makePanel('Settings Navigation'), makePanel('Business Settings'), 0.3)
     default: return makePanel('Dashboard')
   }
 }
@@ -186,7 +159,6 @@ function areasAreAdjacent(first: DOMRect, second: DOMRect) {
   return (touchesHorizontally && horizontalOverlap) || (touchesVertically && verticalOverlap)
 }
 
-const workspaceNames: WorkspaceName[] = ['Dashboard', 'Point of Sale', 'Inventory', 'Insights & Reports', 'Waste', 'Requests', 'Employees', 'Settings']
 
 interface SplitDrag {
   panelId: string
@@ -224,49 +196,58 @@ function resolveSplitDirection(dx: number, dy: number, previous?: Direction): Di
 }
 
 function Workspace() {
-  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceName>('Dashboard')
-  const [layout, setLayout] = useState<LayoutNode>(() => defaultLayout('Dashboard'))
+  const { state } = useStore()
+  const user = useCurrentUser()
+  const auth = useAuth()
+  // First sign-in as the default admin: only Settings (→ My account) until the owner has set up their account.
+  const setupPending = Boolean(auth.user?.must_change_credentials)
+  const allowed = user ? (setupPending ? ['Settings' as WorkspaceName] : allowedWorkspaces(state.settings, user.role)) : []
+  // The owner starts on the Admin Station; a cashier starts on the first workspace they may open (Point of Sale).
+  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceName>(() => allowed[0] ?? 'Point of Sale')
+  const terminal = useTerminal()
+  // Each workspace keeps its own arrangement while you switch tabs.
+  const [layouts, setLayouts] = useState<Partial<Record<WorkspaceName, LayoutNode>>>({})
+  // Built once per workspace: defaultLayout() makes fresh panel ids, and a split drag needs them to stay the same across renders.
+  const defaultLayouts = useRef<Partial<Record<WorkspaceName, LayoutNode>>>({})
+  const initialLayout = (workspace: WorkspaceName) => defaultLayouts.current[workspace] ??= defaultLayout(workspace)
+  const layout = layouts[activeWorkspace] ?? initialLayout(activeWorkspace)
+  const setLayout = (next: LayoutNode | ((current: LayoutNode) => LayoutNode)) => setLayouts((all) => {
+    const current = all[activeWorkspace] ?? initialLayout(activeWorkspace)
+    return { ...all, [activeWorkspace]: typeof next === 'function' ? next(current) : next }
+  })
   const [dragging, setDragging] = useState(false)
   const [splitDrag, setSplitDrag] = useState<SplitDrag | null>(null)
-  const [cartItems, setCartItems] = useState<CartItem[]>(() => products.slice(0, 3).map((product) => ({ product, quantity: 1 })))
-  const [saleComplete, setSaleComplete] = useState(false)
+  const allowedRef = useRef(allowed)
+  const tabStrip = useHorizontalScroll<HTMLDivElement>()
 
-  function addProduct(product: Product) {
-    setSaleComplete(false)
-    setCartItems((current) => {
-      const existing = current.find((item) => item.product.name === product.name)
-      return existing
-        ? current.map((item) => item.product.name === product.name ? { ...item, quantity: item.quantity + 1 } : item)
-        : [...current, { product, quantity: 1 }]
-    })
-  }
+  // Keep the selected tab visible when it changes (including from shortcuts elsewhere in the app).
+  useEffect(() => {
+    tabStrip.element.current?.querySelector<HTMLElement>('.workspace-tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' })
+  }, [activeWorkspace, tabStrip.element])
 
-  function changeQuantity(productName: string, amount: number) {
-    setCartItems((current) => current
-      .map((item) => item.product.name === productName ? { ...item, quantity: item.quantity + amount } : item)
-      .filter((item) => item.quantity > 0))
-  }
+  useEffect(() => { allowedRef.current = allowed })
 
-  function completeSale() {
-    if (cartItems.length === 0) return
-    setCartItems([])
-    setSaleComplete(true)
-  }
+  // If role settings change while open, never leave the user on a workspace they can no longer open.
+  const allowedKey = allowed.join('|')
+  useEffect(() => {
+    if (allowed.length && !allowed.includes(activeWorkspace)) setActiveWorkspace(allowed[0])
+  }, [allowedKey, activeWorkspace])
 
   function selectWorkspace(workspace: WorkspaceName) {
     setActiveWorkspace(workspace)
-    setLayout(defaultLayout(workspace))
     setSplitDrag(null)
   }
 
   useEffect(() => {
     const handleNavigate = (event: Event) => {
       const workspace = (event as CustomEvent<WorkspaceName>).detail
-      if (workspaceNames.includes(workspace)) selectWorkspace(workspace)
+      if (allowedRef.current.includes(workspace)) selectWorkspace(workspace)
     }
     window.addEventListener('workspace-navigate', handleNavigate)
     return () => window.removeEventListener('workspace-navigate', handleNavigate)
   }, [])
+
+  if (!user) return <Navigate to="/" replace />
 
   function beginSplitDrag(event: PointerEvent<HTMLButtonElement>, panelId: string) {
     event.preventDefault()
@@ -383,21 +364,24 @@ function Workspace() {
           <div className="brand-mark" aria-hidden="true"><span>{iconRegistry.brandMark}</span></div>
           <div><strong>9010</strong><span>GROCERY SYSTEM</span></div>
         </div>
-        <div className="workspace-tab-list">
-          <span className="tab-caption">WORKSPACES</span>
-          {workspaceNames.map((workspace) => (
-            <button key={workspace} className={activeWorkspace === workspace ? 'workspace-tab active' : 'workspace-tab'} onClick={() => selectWorkspace(workspace)}>
-              {workspace}
-            </button>
-          ))}
-          <button className="tab-add" title="Add workspace" aria-label="Add workspace" onClick={() => selectWorkspace('Dashboard')}>+</button>
+        <span className="tab-caption">WORKSPACES</span>
+        <div className={`workspace-tab-strip${tabStrip.overflow.left ? ' more-left' : ''}${tabStrip.overflow.right ? ' more-right' : ''}`}>
+          {tabStrip.overflow.left && <button className="tab-scroll left" aria-label="Scroll workspaces left" onClick={() => tabStrip.scrollBy(-1)}>‹</button>}
+          <div className="workspace-tab-list" ref={tabStrip.attach}>
+            {allowed.map((workspace) => (
+              <button key={workspace} className={activeWorkspace === workspace ? 'workspace-tab active' : 'workspace-tab'} onClick={() => selectWorkspace(workspace)}>
+                {workspace}
+              </button>
+            ))}
+          </div>
+          {tabStrip.overflow.right && <button className="tab-scroll right" aria-label="Scroll workspaces right" onClick={() => tabStrip.scrollBy(1)}>›</button>}
         </div>
         <AccountMenu />
       </nav>
 
       <div className="workspace-titlebar">
-        <div><span className="crumb">WORKSPACE</span><b>{activeWorkspace.toUpperCase()}</b><span className="crumb-separator">/</span><span className="title-detail">{workspaceDescription(activeWorkspace)}</span></div>
-        <div className="title-actions"><span className="sync-status"><i /> ALL CHANGES SAVED</span><button className="quiet-button" onClick={() => setLayout(defaultLayout(activeWorkspace))}>Reset layout</button></div>
+        <div><span className="crumb">WORKSPACE</span><b>{activeWorkspace.toUpperCase()}</b><span className="crumb-separator">/</span><span className="title-detail">{workspaceDescription(activeWorkspace)}</span>{user.role === 'Cashier' && <span className="cashier-chip">Cashier: <b>{user.name}</b>{terminal.terminalId && <> · {terminal.terminalId}</>}{!terminal.online && <em> · reconnecting…</em>}</span>}</div>
+        <div className="title-actions"><span className="sync-status"><i /> SAVED LOCALLY</span><button className="quiet-button" onClick={() => setLayout(defaultLayout(activeWorkspace))}>Reset layout</button></div>
       </div>
 
       <section className={`area-canvas${dragging ? ' is-resizing' : ''}${splitDrag ? ' is-splitting' : ''}`}>
@@ -410,24 +394,23 @@ function Workspace() {
           onResizeEnd={() => setDragging(false)}
           onGutterSplit={(targetId, direction, after) => setLayout((current) => splitPanel(current, targetId, direction, after))}
           splitDrag={splitDrag}
-          cartItems={cartItems}
-          onAddProduct={addProduct}
-          onChangeQuantity={changeQuantity}
-          onClearCart={() => { setCartItems([]); setSaleComplete(false) }}
-          onCompleteSale={completeSale}
-          saleComplete={saleComplete}
         />
         {splitDrag?.ghost && <div className="split-ghost" style={splitDrag.ghost} />}
         {splitDrag?.targetRect && splitDrag.targetId !== splitDrag.panelId && <div className={splitDrag.ctrlKey ? 'area-drop-overlay swap-preview' : splitDrag.joinBlocked ? 'area-drop-overlay join-blocked' : 'area-drop-overlay'} style={splitDrag.targetRect} aria-hidden="true" />}
         {splitDrag?.sourceCenter && splitDrag.joinDirection && <div className={splitDrag.ctrlKey ? 'join-direction-indicator swap-preview' : splitDrag.joinBlocked ? 'join-direction-indicator join-blocked' : 'join-direction-indicator'} style={splitDrag.sourceCenter} aria-hidden="true"><span>{splitDrag.ctrlKey ? '↔' : splitDrag.joinBlocked ? '⊘' : ({ left: '←', right: '→', up: '↑', down: '↓' })[splitDrag.joinDirection]}</span></div>}
       </section>
 
-      <footer className="status-bar"><span><i className="status-online" /> LOCAL MODE</span><span>MOCK DATA <b>•</b> LAST UPDATED JUST NOW</span><span className="status-right">9010 GROCERY <b>v1.0.4</b></span></footer>
+      <StatusBar />
+      <Toasts />
     </main>
   )
 }
 
 function AccountMenu() {
+  const { state, actions } = useStore()
+  const user = useCurrentUser()
+  const auth = useAuth()
+  const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -440,32 +423,28 @@ function AccountMenu() {
     return () => document.removeEventListener('pointerdown', closeOutside)
   }, [open])
 
-  function openSettings() {
-    window.dispatchEvent(new CustomEvent('workspace-navigate', { detail: 'Settings' }))
-    setOpen(false)
-  }
-
-  function openCashier() {
-    window.location.hash = '/cashier'
-    setOpen(false)
-  }
+  if (!user) return null
+  const canSettings = allowedWorkspaces(state.settings, user.role).includes('Settings')
+  const shiftOpen = !state.shift.closedAt
 
   return <div className="account-menu-wrap" ref={menuRef}>
     <button className="account-context" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((value) => !value)} onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false) }}>
-      <span className="account-clock">SHIFT 01 <b>08:42 AM</b></span><span className="avatar">JD</span><span className="account-person">John D.<small>STORE OWNER</small></span><span className="account-caret">⌄</span>
+      <span className="account-clock">{shiftOpen ? 'SHIFT OPEN' : 'SHIFT CLOSED'} <b>{time(state.shift.openedAt)}</b></span><span className="avatar">{initials(user.name)}</span><span className="account-person">{user.name.split(' ')[0]} {user.name.split(' ')[1]?.[0] ?? ''}.<small>{user.role.toUpperCase()}</small></span><span className="account-caret">⌄</span>
     </button>
     {open && <div className="account-dropdown" role="menu" aria-label="Account menu">
-      <div className="account-menu-profile"><span className="avatar">JD</span><div><b>John Doe</b><small>STORE OWNER · FULL ACCESS</small></div></div>
-      <button role="menuitem" onClick={openSettings}><span>⚙</span> Store settings</button>
-      <button role="menuitem" onClick={openCashier}><span>▦</span> Cashier terminal</button>
+      <div className="account-menu-profile"><span className="avatar">{initials(user.name)}</span><div><b>{user.name}</b><small>{user.role.toUpperCase()} · {user.role === 'Owner' ? 'FULL ACCESS' : `${allowedWorkspaces(state.settings, user.role).length} WORKSPACES`}</small></div></div>
+      {canSettings && <button role="menuitem" onClick={() => { actions.navigate('Settings'); setOpen(false) }}><span>⚙</span> Store settings</button>}
+      {user.role === 'Owner'
+        ? <button role="menuitem" onClick={() => { setOpen(false); void auth.logout().then(() => navigate('/')) }}><span>⎋</span> Sign out</button>
+        : <p className="account-menu-note">Your shift is ended by the owner from the Admin Station.</p>}
     </div>}
   </div>
 }
 
 function workspaceDescription(workspace: WorkspaceName) {
   const descriptions: Record<WorkspaceName, string> = {
-    Dashboard: 'Store overview', 'Point of Sale': 'Checkout terminal', Inventory: 'Stock control',
-    'Insights & Reports': 'Forecasts, tax & operations', Waste: 'Loss tracking', Requests: 'Customer demand', Employees: 'Team access', Settings: 'Store configuration',
+    'Admin Station': 'Terminals, cashiers & team', Dashboard: 'Store overview', 'Point of Sale': 'Checkout terminal', Transactions: 'Receipts, returns & cash drawer', Inventory: 'Stock control', Purchasing: 'AI replenishment & suppliers',
+    'AI Insights': 'Forecasts, trends & recommendations', Reports: 'BIR readings, tax & operations', Waste: 'Loss tracking', Requests: 'Customer demand', Settings: 'Store configuration',
   }
   return descriptions[workspace]
 }
@@ -479,20 +458,14 @@ interface LayoutViewProps {
   onResizeEnd: () => void
   onGutterSplit: (targetId: string, direction: Direction, after: boolean) => void
   splitDrag: SplitDrag | null
-  cartItems: CartItem[]
-  onAddProduct: (product: Product) => void
-  onChangeQuantity: (productName: string, amount: number) => void
-  onClearCart: () => void
-  onCompleteSale: () => void
-  saleComplete: boolean
 }
 
-function LayoutView({ node, onLayoutChange, onEditorChange, onSplitDrag, onResizeStart, onResizeEnd, onGutterSplit, splitDrag, cartItems, onAddProduct, onChangeQuantity, onClearCart, onCompleteSale, saleComplete }: LayoutViewProps) {
+function LayoutView({ node, onLayoutChange, onEditorChange, onSplitDrag, onResizeStart, onResizeEnd, onGutterSplit, splitDrag }: LayoutViewProps) {
   if (node.type === 'panel') {
     const highlighted = splitDrag?.panelId === node.id && splitDrag.targetId === node.id && Math.hypot(splitDrag.x - splitDrag.startX, splitDrag.y - splitDrag.startY) > 12
     return (
       <article className={`workspace-area${highlighted ? ' split-target' : ''}`} data-area-id={node.id}>
-        <AreaPanel node={node} onEditorChange={onEditorChange} onSplitDrag={onSplitDrag} cartItems={cartItems} onAddProduct={onAddProduct} onChangeQuantity={onChangeQuantity} onClearCart={onClearCart} onCompleteSale={onCompleteSale} saleComplete={saleComplete} />
+        <AreaPanel node={node} onEditorChange={onEditorChange} onSplitDrag={onSplitDrag} />
       </article>
     )
   }
@@ -570,28 +543,30 @@ function LayoutView({ node, onLayoutChange, onEditorChange, onSplitDrag, onResiz
 
   return (
     <div className={`area-split ${node.direction}`} style={splitStyle}>
-      <LayoutView node={node.first} onLayoutChange={onLayoutChange} onEditorChange={onEditorChange} onSplitDrag={onSplitDrag} onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} onGutterSplit={onGutterSplit} splitDrag={splitDrag} cartItems={cartItems} onAddProduct={onAddProduct} onChangeQuantity={onChangeQuantity} onClearCart={onClearCart} onCompleteSale={onCompleteSale} saleComplete={saleComplete} />
+      <LayoutView node={node.first} onLayoutChange={onLayoutChange} onEditorChange={onEditorChange} onSplitDrag={onSplitDrag} onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} onGutterSplit={onGutterSplit} splitDrag={splitDrag} />
       <div className={`area-gutter ${node.direction}`} role="separator" aria-orientation={node.direction === 'horizontal' ? 'vertical' : 'horizontal'} onPointerDown={onGutterPointerDown}>
         <span className="gutter-grip" />
       </div>
-      <LayoutView node={node.second} onLayoutChange={onLayoutChange} onEditorChange={onEditorChange} onSplitDrag={onSplitDrag} onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} onGutterSplit={onGutterSplit} splitDrag={splitDrag} cartItems={cartItems} onAddProduct={onAddProduct} onChangeQuantity={onChangeQuantity} onClearCart={onClearCart} onCompleteSale={onCompleteSale} saleComplete={saleComplete} />
+      <LayoutView node={node.second} onLayoutChange={onLayoutChange} onEditorChange={onEditorChange} onSplitDrag={onSplitDrag} onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} onGutterSplit={onGutterSplit} splitDrag={splitDrag} />
     </div>
   )
 }
 
-function AreaPanel({ node, onEditorChange, onSplitDrag, cartItems, onAddProduct, onChangeQuantity, onClearCart, onCompleteSale, saleComplete }: {
+function AreaPanel({ node, onEditorChange, onSplitDrag }: {
   node: Extract<LayoutNode, { type: 'panel' }>
   onEditorChange: (id: string, editor: Editor) => void
   onSplitDrag: (event: PointerEvent<HTMLButtonElement>, id: string) => void
-  cartItems: CartItem[]
-  onAddProduct: (product: Product) => void
-  onChangeQuantity: (productName: string, amount: number) => void
-  onClearCart: () => void
-  onCompleteSale: () => void
-  saleComplete: boolean
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null)
+  const { state } = useStore()
+  const user = useCurrentUser()
+  // A panel can only be switched to editors from workspaces this role may open (cashiers never see owner screens).
+  const setupPending = Boolean(useAuth().user?.must_change_credentials)
+  const allowed = user ? (setupPending ? ['Settings' as WorkspaceName] : allowedWorkspaces(state.settings, user.role)) : []
+  const visibleGroups = editorGroups
+    .map((group) => ({ ...group, items: group.items.filter((editor) => editorWorkspaces[editor].some((w) => allowed.includes(w))) }))
+    .filter((group) => group.items.length > 0)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -602,13 +577,17 @@ function AreaPanel({ node, onEditorChange, onSplitDrag, cartItems, onAddProduct,
       if (!menuRef.current?.contains(target) && !triggerRef.current?.contains(target)) setMenuOpen(false)
     }
     const closeOnViewportChange = () => setMenuOpen(false)
+    // The menu is positioned once, so it closes when the page behind it scrolls, but scrolling its own list must not close it.
+    const closeOnOutsideScroll = (event: Event) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false)
+    }
     document.addEventListener('pointerdown', closeOutside)
     window.addEventListener('resize', closeOnViewportChange)
-    window.addEventListener('scroll', closeOnViewportChange, true)
+    window.addEventListener('scroll', closeOnOutsideScroll, true)
     return () => {
       document.removeEventListener('pointerdown', closeOutside)
       window.removeEventListener('resize', closeOnViewportChange)
-      window.removeEventListener('scroll', closeOnViewportChange, true)
+      window.removeEventListener('scroll', closeOnOutsideScroll, true)
     }
   }, [menuOpen])
 
@@ -640,7 +619,7 @@ function AreaPanel({ node, onEditorChange, onSplitDrag, cartItems, onAddProduct,
             <span className="editor-type-icon">{iconRegistry.editors[node.editor]}</span><span>{node.editor}</span><span className="editor-type-caret">⌄</span>
           </button>
           {menuOpen && menuPosition && createPortal(<div ref={menuRef} className="editor-type-menu" style={menuPosition} role="menu" aria-label="Editor Type" onKeyDown={(event) => { if (event.key === 'Escape') setMenuOpen(false) }}>
-            {editorGroups.map((group) => <section className="editor-menu-group" key={group.category} role="group" aria-label={group.category}>
+            {visibleGroups.map((group) => <section className="editor-menu-group" key={group.category} role="group" aria-label={group.category}>
               <h3>{group.category}</h3>
               {group.items.map((editor) => <button key={editor} role="menuitemradio" aria-checked={node.editor === editor} className={node.editor === editor ? 'editor-menu-item selected' : 'editor-menu-item'} onClick={() => { onEditorChange(node.id, editor); setMenuOpen(false) }}>
                 <span className="editor-type-icon">{iconRegistry.editors[editor]}</span><span>{editor}</span>{node.editor === editor && <i>✓</i>}
@@ -652,178 +631,32 @@ function AreaPanel({ node, onEditorChange, onSplitDrag, cartItems, onAddProduct,
       </div>
     </header>
     <button className="area-corner-handle" title="Drag corner to split, join, or Ctrl-drag to swap" aria-label="Drag area corner to split, join, or swap" onPointerDown={(event) => onSplitDrag(event, node.id)}><span>◢</span></button>
-    <div className="area-content"><EditorContent editor={node.editor} cartItems={cartItems} onAddProduct={onAddProduct} onChangeQuantity={onChangeQuantity} onClearCart={onClearCart} onCompleteSale={onCompleteSale} saleComplete={saleComplete} /></div>
+    <div className="area-content"><EditorContent editor={node.editor} /></div>
   </>
 }
 
-function EditorContent({ editor, cartItems, onAddProduct, onChangeQuantity, onClearCart, onCompleteSale, saleComplete }: {
-  editor: Editor
-  cartItems: CartItem[]
-  onAddProduct: (product: Product) => void
-  onChangeQuantity: (productName: string, amount: number) => void
-  onClearCart: () => void
-  onCompleteSale: () => void
-  saleComplete: boolean
-}) {
-  switch (editor) {
-    case 'Dashboard': return <DashboardPanel />
-    case 'Product Grid': return <ProductGrid onAddProduct={onAddProduct} />
-    case 'Cart': return <CartPanel items={cartItems} onChangeQuantity={onChangeQuantity} onClear={onClearCart} onComplete={onCompleteSale} saleComplete={saleComplete} />
-    case 'Inventory Metrics': return <InventoryMetrics />
-    case 'Inventory Table': return <InventoryTable />
-    case 'WMA Forecast': return <ForecastPanel />
-    case 'Model Explanation': return <ModelPanel />
-    case 'Purchasing': return <PurchasingPanel />
-    case 'Waste Log': return <WastePanel />
-    case 'Customer Requests': return <RequestsPanel />
-    case 'Employees': return <EmployeesPanel />
-    case 'Reports': return <ReportsPanel />
-    case 'Settings Navigation': return <SettingsNav />
-    case 'Business Settings': return <BusinessSettings />
-  }
+function EditorContent({ editor }: { editor: Editor }) {
+  const Component = editors[editor]
+  return <Component />
 }
 
-function DashboardPanel() {
-  return <div className="dashboard-panel">
-    <div className="alert-banner"><span className="alert-mark">!</span><div><b>2 items need attention</b><span>Review low stock and near-expiry products before end of shift.</span></div><button onClick={() => window.dispatchEvent(new CustomEvent('workspace-navigate', { detail: 'Inventory' }))}>REVIEW INVENTORY <span>↗</span></button></div>
-    <div className="dashboard-heading"><div><span className="eyebrow">SUNDAY, OCTOBER 4, 2026</span><h1>Good morning, John.</h1><p>Here’s how Central Market is performing today.</p></div><span className="open-status"><i /> STORE OPEN</span></div>
-    <div className="metric-grid">
-      <Metric label="Today's sales" value="₱18,420" change="+12.8%" note="vs. yesterday" accent="green" />
-      <Metric label="Transactions" value="143" change="+8.2%" note="since opening" accent="orange" />
-      <Metric label="Low-stock items" value="06" change="2 urgent" note="below reorder point" accent="red" />
-      <Metric label="Near expiry" value="12" change="next 7 days" note="across 4 products" accent="blue" />
-    </div>
-    <div className="dashboard-lower">
-      <section className="dashboard-module"><SectionHeading title="QUICK ACCESS" action="ALL MODULES" /><div className="shortcut-grid">
-        {(['Point of Sale', 'Inventory', 'Insights & Reports', 'Waste', 'Settings'] as (keyof typeof iconRegistry.shortcuts)[]).map((name, index) => <button key={name} className="shortcut" onClick={() => window.dispatchEvent(new CustomEvent('workspace-navigate', { detail: name }))}><span className={`shortcut-icon tone-${index}`}>{iconRegistry.shortcuts[name]}</span><span><b>{name}</b><small>{['Start a transaction', 'Manage stock and reorders', 'Forecasts and BIR reports', 'Track losses', 'Store preferences'][index]}</small></span><i>→</i></button>)}
-      </div></section>
-      <section className="dashboard-module attention-module"><SectionHeading title="NEEDS ATTENTION" action="VIEW ALL" /><div className="attention-item"><span className="attention-symbol warning">!</span><div><b>Datu Puti Vinegar 1L</b><small>6 units left · reorder point 10</small></div><span className="attention-count">LOW STOCK</span></div><div className="attention-item"><span className="attention-symbol expiry">◷</span><div><b>Fresh Milk 1L</b><small>8 units · expires in 2 days</small></div><span className="attention-count">EXPIRING</span></div><div className="attention-foot"><span>AI RECOMMENDATION</span><b>3 reorder suggestions ready</b><button onClick={() => window.dispatchEvent(new CustomEvent('workspace-navigate', { detail: 'Inventory' }))}>Review list →</button></div></section>
-    </div>
-  </div>
-}
-
-function Metric({ label, value, change, note, accent }: { label: string; value: string; change: string; note: string; accent: string }) {
-  return <div className={`metric-card ${accent}`}><div className="metric-top"><span>{label}</span><i>↗</i></div><strong>{value}</strong><div className="metric-note"><b>{change}</b><span>{note}</span></div><div className="metric-spark"><span /></div></div>
-}
-
-function SectionHeading({ title, action }: { title: string; action?: string }) {
-  return <div className="section-heading"><h2>{title}</h2>{action && <button>{action} <span>↗</span></button>}</div>
-}
-
-const products: Product[] = [
-  { name: 'Jasmine Rice 5kg', category: 'Grains', price: 325, stock: 24, color: 'rice', symbol: 'R' },
-  { name: 'Fresh Milk 1L', category: 'Dairy', price: 98, stock: 8, color: 'milk', symbol: 'M' },
-  { name: 'Bananas 1kg', category: 'Produce', price: 82, stock: 31, color: 'banana', symbol: 'B' },
-  { name: 'Eggs (12 pcs)', category: 'Dairy', price: 112, stock: 16, color: 'eggs', symbol: 'E' },
-  { name: 'Instant Noodles', category: 'Pantry', price: 18, stock: 54, color: 'noodles', symbol: 'N' },
-  { name: 'Cooking Oil 1L', category: 'Pantry', price: 145, stock: 12, color: 'oil', symbol: 'O' },
-]
-
-function ProductGrid({ onAddProduct }: { onAddProduct: (product: Product) => void }) {
-  const [query, setQuery] = useState('')
-  const [category, setCategory] = useState('All items')
-  const categories = ['All items', 'Produce', 'Dairy', 'Grains', 'Pantry']
-  const filtered = products.filter((product) => (category === 'All items' || product.category === category) && product.name.toLowerCase().includes(query.toLowerCase()))
-  return <div className="pos-products"><div className="panel-toolbar"><label className="search-field"><span>⌕</span><input placeholder="Search products or scan barcode" value={query} onChange={(event) => setQuery(event.target.value)} /><kbd>⌘ K</kbd></label><button className="scan-button" title="Scan barcode" aria-label="Scan barcode">▥</button></div><div className="category-pills">{categories.map((item) => <button key={item} className={category === item ? 'selected' : ''} onClick={() => setCategory(item)}>{item}</button>)}</div><div className="product-grid">{filtered.map((product) => <button className="product-card" key={product.name} onClick={() => onAddProduct(product)}><span className={`product-image ${product.color}`}><i>{product.symbol}</i><small>{product.category.toUpperCase()}</small></span><span className="product-info"><b>{product.name}</b><span>₱{product.price.toFixed(2)}</span><small className={product.stock < 10 ? 'stock-low' : ''}>{product.stock} in stock</small></span><span className="product-add">+</span></button>)}</div><div className="results-count">SHOWING {filtered.length} OF {products.length} PRODUCTS <button>MANAGE CATALOG ↗</button></div></div>
-}
-
-function CartPanel({ items, onChangeQuantity, onClear, onComplete, saleComplete }: {
-  items: CartItem[]
-  onChangeQuantity: (productName: string, amount: number) => void
-  onClear: () => void
-  onComplete: () => void
-  saleComplete: boolean
-}) {
-  const subtotal = items.reduce((sum, item) => sum + item.product.price * item.quantity, 0)
-  const vat = subtotal - subtotal / 1.12
-  return <div className="cart-panel">
-    <div className="cart-meta"><span>TRANSACTION <b>#POS-00482</b></span><button onClick={onClear}>CLEAR</button></div>
-    <div className="cart-lines">
-      {items.length > 0 ? items.map(({ product, quantity }, index) => <div className="cart-line" key={product.name}>
-        <span className="cart-line-index">{String(index + 1).padStart(2, '0')}</span>
-        <div className="cart-item-name"><b>{product.name}</b><small>₱{product.price.toFixed(2)} / unit</small></div>
-        <div className="quantity-control">
-          <button aria-label={`Remove one ${product.name}`} onClick={() => onChangeQuantity(product.name, -1)}>−</button>
-          <span>{quantity}</span>
-          <button aria-label={`Add one ${product.name}`} onClick={() => onChangeQuantity(product.name, 1)}>+</button>
-        </div>
-        <strong>₱{(product.price * quantity).toFixed(2)}</strong>
-      </div>) : <div className="empty-cart">{saleComplete ? 'Sale completed. Ready for the next transaction.' : 'Cart cleared. Add a product to begin.'}</div>}
-    </div>
-    <div className="cart-bottom">
-      <div className="cart-totals">
-        <div><span>Subtotal</span><b>₱{subtotal.toFixed(2)}</b></div>
-        <div><span>VAT included (12%)</span><b>₱{vat.toFixed(2)}</b></div>
-        <div className="total-due"><span>TOTAL DUE</span><strong>₱{subtotal.toFixed(2)}</strong></div>
-      </div>
-      <button className="complete-sale" disabled={items.length === 0} onClick={onComplete}>COMPLETE SALE <span>→</span></button>
-      <div className="payment-hint">ENTER <span>·</span> CASH PAYMENT <span>·</span> EXACT CHANGE</div>
-    </div>
-  </div>
-}
-
-function InventoryMetrics() {
-  return <div className="inventory-metrics"><div className="inventory-heading"><div><span className="eyebrow">STOCK OVERVIEW</span><h2>Inventory at a glance</h2></div><button className="outline-button">↓ EXPORT</button></div><div className="inventory-metric-grid"><Metric label="Total products" value="1,284" change="+18" note="this month" accent="green" /><Metric label="Inventory value" value="₱842k" change="+4.6%" note="vs. last month" accent="blue" /><Metric label="Low stock" value="06" change="2 urgent" note="below reorder level" accent="red" /><Metric label="Near expiry" value="12" change="next 7 days" note="across 4 products" accent="orange" /></div></div>
-}
-
-function InventoryTable() {
-  const [query, setQuery] = useState('')
-  const rows = [
-    ['Jasmine Rice 5kg', 'Grains', '24 bags', '10 bags', 'In stock', 'Dec 18, 2026'],
-    ['Datu Puti Vinegar 1L', 'Condiments', '6 bottles', '10 bottles', 'Low stock', 'Feb 12, 2027'],
-    ['Fresh Milk 1L', 'Dairy', '8 cartons', '15 cartons', 'Near expiry', 'Oct 06, 2026'],
-    ['Cooking Oil 1L', 'Pantry', '12 bottles', '10 bottles', 'In stock', 'Jan 23, 2027'],
-    ['Eggs (12 pcs)', 'Dairy', '16 trays', '12 trays', 'In stock', 'Oct 13, 2026'],
-  ].filter((row) => row[0].toLowerCase().includes(query.toLowerCase()))
-  return <div className="table-panel"><div className="table-toolbar"><label className="search-field compact"><span>⌕</span><input placeholder="Filter products" value={query} onChange={(event) => setQuery(event.target.value)} /></label><div><button className="outline-button">FILTER <span>⌄</span></button><button className="primary-button">＋ ADD PRODUCT</button></div></div><div className="data-table-wrap"><table className="data-table"><thead><tr>{['PRODUCT', 'CATEGORY', 'ON HAND', 'REORDER AT', 'STATUS', 'EXPIRY'].map((heading) => <th key={heading}>{heading}</th>)}</tr></thead><tbody>{rows.map((row) => <tr key={row[0]}><td><b>{row[0]}</b><small>SKU · 90{rows.indexOf(row) + 1}84</small></td>{row.slice(1).map((cell, index) => index === 3 ? <td key={index}><span className={`status-pill ${cell.toLowerCase().replace(' ', '-')}`}>{cell}</span></td> : <td key={index}>{cell}</td>)}</tr>)}</tbody></table></div><div className="table-foot"><span>SHOWING {rows.length} OF 1,284 PRODUCTS</span><div><button>‹</button><b>1</b><button>2</button><button>3</button><span>…</span><button>52</button><button>›</button></div></div></div>
-}
-
-function ForecastPanel() {
-  const bars = [39, 53, 46, 63, 58, 71, 49, 78, 65, 83, 61, 74]
-  return <div className="forecast-panel"><div className="forecast-heading"><div><span className="eyebrow">DEMAND FORECAST · JASMINE RICE 5KG</span><h2>Sales trend &amp; forecast</h2></div><button className="range-select">LAST 12 WEEKS⌄</button></div><div className="chart-legend"><span><i className="legend-sales" /> ACTUAL SALES</span><span><i className="legend-forecast" /> WMA FORECAST</span></div><div className="chart"><div className="chart-y-labels"><span>100</span><span>75</span><span>50</span><span>25</span><span>0</span></div><div className="chart-main"><div className="chart-gridlines"><i /><i /><i /><i /><i /></div><div className="chart-bars">{bars.map((height, index) => <div className="chart-column" key={index}><span className="chart-bar" style={{ height: `${height}%` }} /><small>W{index + 1}</small></div>)}</div><svg className="forecast-line" viewBox="0 0 600 180" preserveAspectRatio="none" aria-label="WMA forecast line"><polyline points="0,92 50,86 100,83 150,79 200,72 250,70 300,67 350,64 400,60 450,57 500,54 550,52 600,47" /></svg></div></div><div className="chart-insight"><span>↗</span><div><b>Demand is trending up</b><small>Average weekly sales increased 8.4% over the last 4 weeks.</small></div><strong>+8.4%</strong></div></div>
-}
-
-function ModelPanel() {
-  return <div className="model-panel"><div className="model-title"><span className="model-symbol">∑</span><div><span className="eyebrow">MODEL DETAILS</span><h2>Weighted moving average</h2></div></div><p className="model-description">Recent sales are weighted more heavily to respond to changing demand while smoothing short-term fluctuations.</p><div className="forecast-callout"><span>NEXT WEEK FORECAST</span><strong>11.6 <small>units / week</small></strong><div><i /> HIGH CONFIDENCE <b>86%</b></div></div><SectionHeading title="WEIGHT CONFIGURATION" /><div className="weight-list">{[['W1', 'Most recent week', '0.50', '50%'], ['W2', 'Previous week', '0.30', '30%'], ['W3', 'Two weeks prior', '0.20', '20%']].map(([key, label, value, width]) => <div className="weight-row" key={key}><span>{key}</span><div><b>{label}</b><i><em style={{ width }} /></i></div><strong>{value}</strong></div>)}</div><div className="advisory-banner"><span>i</span><p><b>Reorder advisory</b><small>Projected demand is above current stock coverage. Consider adding 8 units to the next purchase order.</small></p></div><div className="model-foot"><span>MODEL UPDATED 06:00 AM</span><button>VIEW METHODOLOGY ↗</button></div></div>
-}
-
-const purchaseRows = [['Jasmine Rice 5kg', '24 bags', '11 bags', '8 bags', 'Rice & Grains'], ['Datu Puti Vinegar 1L', '6 bottles', '10 bottles', '12 bottles', 'Condiments'], ['Fresh Milk 1L', '8 cartons', '15 cartons', '10 cartons', 'Dairy'], ['Cooking Oil 1L', '12 bottles', '10 bottles', '6 bottles', 'Pantry']]
-
-function PurchasingPanel() {
-  return <div className="module-panel"><div className="module-intro"><div><span className="eyebrow">AI-ASSISTED REPLENISHMENT</span><h2>Suggested purchase orders</h2><p>Based on stock levels, lead times, and weighted moving average forecasts.</p></div><button className="primary-button">＋ CREATE PURCHASE ORDER</button></div><div className="data-table-wrap"><table className="data-table"><thead><tr>{['PRODUCT', 'ON HAND', 'REORDER AT', 'SUGGESTED QTY', 'SUPPLIER'].map((heading) => <th key={heading}>{heading}</th>)}</tr></thead><tbody>{purchaseRows.map((row) => <tr key={row[0]}><td><b>{row[0]}</b></td><td>{row[1]}</td><td>{row[2]}</td><td><span className="suggested-qty">{row[3]}</span></td><td>{row[4]}</td></tr>)}</tbody></table></div><div className="wma-evidence"><span className="evidence-icon">⌁</span><div><b>WMA evidence</b><small>4 products matched reorder thresholds · Demand model refreshed today at 06:00 AM</small></div><button>INSPECT FORECAST →</button></div></div>
-}
-
-function WastePanel() {
-  const rows = [['Fresh Milk 1L', '4 cartons', 'Expired', '₱392.00', 'Today, 08:14'], ['Bananas 1kg', '2 kg', 'Damaged', '₱164.00', 'Today, 07:32'], ['White Bread', '3 loaves', 'Expired', '₱150.00', 'Yesterday'], ['Eggs (12 pcs)', '1 tray', 'Damaged', '₱112.00', 'Oct 02, 2026']]
-  return <ModuleTable title="Waste & spoilage log" eyebrow="LOSS PREVENTION" action="＋ LOG WASTE" headers={['PRODUCT', 'QUANTITY', 'REASON', 'VALUE', 'DATE LOGGED']} rows={rows} />
-}
-
-function RequestsPanel() {
-  const rows = [['Silver Swan Soy Sauce, 1 gal', 'Pantry', 'Maria Santos', 'Today, 08:22', 'New'], ['Oat Milk, Unsweetened', 'Dairy alternatives', 'R. Dela Cruz', 'Today, 07:56', 'Review'], ['Brown Sugar 2kg', 'Baking', 'Ana Reyes', 'Yesterday', 'Review'], ['Canned Sardines (spicy)', 'Canned goods', 'Walk-in', 'Oct 02, 2026', 'Ordered']]
-  return <ModuleTable title="Customer item requests" eyebrow="CUSTOMER DEMAND" action="＋ ADD REQUEST" headers={['REQUESTED ITEM', 'CATEGORY', 'REQUESTED BY', 'DATE', 'STATUS']} rows={rows} />
-}
-
-function EmployeesPanel() {
-  const rows = [['John Doe', 'john.doe@9010.store', 'Store Owner', 'Active', 'Today, 06:02'], ['Maria Santos', 'm.santos@9010.store', 'Cashier', 'Active', 'Today, 08:12'], ['Rafael Cruz', 'r.cruz@9010.store', 'Inventory Clerk', 'Active', 'Today, 07:48'], ['Ana Reyes', 'a.reyes@9010.store', 'Cashier', 'On leave', 'Oct 03, 2026']]
-  return <ModuleTable title="Team members" eyebrow="PEOPLE & ACCESS" action="＋ ADD EMPLOYEE" headers={['EMPLOYEE', 'EMAIL', 'ROLE', 'STATUS', 'LAST ACTIVE']} rows={rows} />
-}
-
-function ModuleTable({ title, eyebrow, action, headers, rows }: { title: string; eyebrow: string; action: string; headers: string[]; rows: string[][] }) {
-  return <div className="module-panel"><div className="module-intro"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>Store data is shown from the local demo dataset.</p></div><button className="primary-button">{action}</button></div><div className="table-toolbar"><label className="search-field compact"><span>⌕</span><input placeholder="Search records" /></label><button className="outline-button">FILTER⌄</button></div><div className="data-table-wrap"><table className="data-table"><thead><tr>{headers.map((heading) => <th key={heading}>{heading}</th>)}</tr></thead><tbody>{rows.map((row) => <tr key={row[0]}>{row.map((cell, index) => <td key={index}>{index === 0 ? <b>{cell}</b> : index === row.length - 2 && ['New', 'Review', 'Ordered', 'Active', 'On leave'].includes(cell) ? <span className={`status-pill ${cell.toLowerCase().replace(' ', '-')}`}>{cell}</span> : cell}</td>)}</tr>)}</tbody></table></div><div className="table-foot"><span>SHOWING {rows.length} RECORDS</span><div><button>‹</button><b>1</b><button>2</button><button>3</button><button>›</button></div></div></div>
-}
-
-function ReportsPanel() {
-  const reports = [['X-Reading', 'Mid-shift sales summary', 'SHIFT REPORT', '↗'], ['Z-Reading', 'End-of-day register close', 'DAILY CLOSE', '▥'], ['e-Journal', 'Electronic sales journal', 'BIR COMPLIANT', '≡'], ['VAT Summary', 'Output tax by period', 'TAX SUMMARY', '₱'], ['Sales by Item', 'Product performance breakdown', 'OPERATIONS', '▤'], ['Inventory Valuation', 'Stock value at cost', 'INVENTORY', '◫']]
-  return <div className="module-panel reports-panel"><div className="module-intro"><div><span className="eyebrow">REPORT CENTER</span><h2>Reports &amp; compliance</h2><p>Operational summaries and BIR-aligned records for your store.</p></div><button className="outline-button">DATE RANGE⌄</button></div><div className="report-grid">{reports.map(([name, description, tag, icon]) => <button className="report-card" key={name}><span className="report-icon">{icon}</span><span className="report-tag">{tag}</span><b>{name}</b><small>{description}</small><i>OPEN REPORT ↗</i></button>)}</div></div>
-}
-
-function SettingsNav() {
-  const categories = ['Business profile', 'Tax & receipts', 'Payment methods', 'Inventory rules', 'Notifications', 'Access & roles']
-  return <div className="settings-nav"><span className="eyebrow">CONFIGURATION</span><h2>Store settings</h2>{categories.map((category, index) => <button className={index === 0 ? 'selected' : ''} key={category}>{category}<span>›</span></button>)}</div>
-}
-
-function BusinessSettings() {
-  return <div className="settings-form"><span className="eyebrow">BUSINESS PROFILE</span><h2>Store information</h2><p>These details appear on receipts and generated reports.</p><label>REGISTERED BUSINESS NAME<input defaultValue="9010 Grocery Retail Inc." /></label><label>STORE DISPLAY NAME<input defaultValue="Central Market" /></label><div className="form-row"><label>BUSINESS TIN<input defaultValue="000-123-456-000" /></label><label>STORE CODE<input defaultValue="CM-001" /></label></div><label>REGISTERED ADDRESS<textarea defaultValue="123 Market Street, Quezon City, Metro Manila" /></label><div className="form-actions"><span>LAST SAVED TODAY, 08:20 AM</span><button className="primary-button">SAVE CHANGES</button></div></div>
+function StatusBar() {
+  const { state } = useStore()
+  const { insights } = useAnalytics()
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
+  const critical = insights.filter((i) => i.severity === 'critical').length
+  return <footer className="status-bar">
+    {state.source === 'live'
+      ? <span title={state.liveError ?? (state.liveSyncedAt ? `Last loaded ${time(state.liveSyncedAt)}` : undefined)}><i className={state.liveError ? 'status-offline' : 'status-online'} /> {state.liveError ? 'SERVER UNREACHABLE · SHOWING LAST DATA' : 'LIVE · STORE DATABASE'}</span>
+      : <span title="The store server hasn't been reached yet, so there is no data to show."><i className="status-demo" /> NOT CONNECTED</span>}
+    <span>{state.transactions.length} RECEIPTS (7 DAYS) <b>•</b> AI MODEL {state.settings.forecastMethod}</span>
+    {critical > 0 && <span className="status-alert">{critical} CRITICAL ALERT{critical > 1 ? 'S' : ''}</span>}
+    <span className="status-right">{time(now)} <b>·</b> 9010 GROCERY <b>v1.1.0</b></span>
+  </footer>
 }
 
 export default Workspace

@@ -1,0 +1,535 @@
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { allWorkspaces, colorForCategory, defaultSettings, emptyStoreData, OWNER_ONLY_WORKSPACES, type StoreData } from '../data/defaults'
+import type {
+  CartLine, CustomerRequest, CustomerType, Employee, HeldCart, PaymentMethod, Product, PurchaseOrder, RequestStatus, Role, Settings, Transaction, WasteEntry, WasteReason, WorkspaceName,
+} from '../data/types'
+import { actingTerminalId } from '../lib/actingTerminal'
+import { abcClasses, analyseProduct, buildInsights, type Insight, type ProductAnalysis } from '../lib/ai'
+import { DAY_MS, dateKey } from '../lib/format'
+import { computeTotals } from '../lib/pos'
+import {
+  apiErrorMessage, getAuthStatus, getStoreSnapshot, patchRequestStatus, postEmployee, postProduct, postRefund, postRequest, postSale, postStockChange, postVoid, postWaste,
+  putEmployee, putProduct, putStoreName, verifyOwnerPin, type ProductPayload, type StoreProduct, type StoreSnapshot,
+} from '../services/api'
+
+export interface UiState {
+  forecastProductId: string
+  settingsSection: SettingsSection
+  selectedTxnId: string | null
+  returnTxnId: string | null
+  inventoryFilter: 'All' | 'Low stock' | 'Near expiry' | 'Out of stock'
+}
+
+export type SettingsSection = 'My account' | 'Business profile' | 'Tax & receipts' | 'Payment methods' | 'Inventory & AI' | 'Notifications' | 'Access & roles' | 'Data'
+
+export interface Toast { id: number; message: string; tone: 'success' | 'error' | 'info' }
+
+/**
+ * Where the screens' data comes from. "live": the store's MySQL database through the API (products, stock,
+ * sales, refunds, waste, requests, employees); every change is saved there. "demo": no server reached yet, so the
+ * screens are empty. Purchase orders and the cash drawer are still kept on each PC.
+ */
+export type DataSource = 'demo' | 'live'
+
+interface StoreState extends StoreData {
+  employees: Employee[]
+  settings: Settings
+  cart: CartLine[]
+  customerType: CustomerType
+  heldCarts: HeldCart[]
+  sessionId: string | null
+  ui: UiState
+  source: DataSource
+  /** When the live data was last loaded from the server, and the last error if a refresh failed. */
+  liveSyncedAt: string | null
+  liveError: string | null
+}
+
+// v3: the generated demo dataset is gone; older saved state (which held it) is discarded.
+// A window acting as a terminal keeps its own copy, so its cart doesn't mix with the owner window's (same PC, same storage).
+const STORAGE_KEY = `pos9010-state-v3${actingTerminalId() ? `:${actingTerminalId()}` : ''}`
+const defaultUi: UiState = { forecastProductId: '', settingsSection: 'Business profile', selectedTxnId: null, returnTxnId: null, inventoryFilter: 'All' }
+/** Live data is reloaded this often, so sales on other terminals and stock changes show up. */
+const LIVE_REFRESH_MS = 20_000
+/** Which database this PC's saved data belongs to (see the install-id check in useStoreValue). */
+const INSTALL_KEY = 'pos9010.installId'
+
+function freshState(): StoreState {
+  return {
+    ...emptyStoreData(),
+    employees: [],
+    settings: defaultSettings,
+    cart: [],
+    customerType: 'Regular',
+    heldCarts: [],
+    sessionId: null,
+    ui: defaultUi,
+    source: 'demo',
+    liveSyncedAt: null,
+    liveError: null,
+  }
+}
+
+function loadState(): StoreState {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (raw) {
+      const saved = JSON.parse(raw) as StoreState
+      // Shown straight away, then refreshed from the server.
+      return { ...saved, settings: { ...defaultSettings, ...saved.settings }, ui: { ...defaultUi, ...saved.ui }, source: saved.source ?? 'demo', liveSyncedAt: saved.liveSyncedAt ?? null, liveError: null }
+    }
+  } catch { /* storage unavailable or corrupt: fall back to the seed */ }
+  return freshState()
+}
+
+const uid = (prefix: string) => `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+
+// ----- Live data: server shapes ↔ UI shapes -----
+
+/** Suppliers are identified by name (there is no supplier list yet), so supplierId holds the supplier's name. */
+function toUiProduct({ supplierName, ...product }: StoreProduct): Product {
+  return {
+    ...product,
+    supplierId: supplierName ?? '',
+    color: colorForCategory(product.category),
+    symbol: (product.name.trim()[0] ?? '?').toUpperCase(),
+  }
+}
+
+function toPayload(product: Product): ProductPayload {
+  return {
+    name: product.name,
+    sku: product.sku,
+    barcode: product.barcode,
+    category: product.category,
+    supplier_name: product.supplierId,
+    unit: product.unit,
+    price: product.price,
+    cost: product.cost,
+    reorder_point: Math.round(product.reorderPoint),
+    lead_time_days: Math.round(product.leadTimeDays),
+    stock: Math.round(product.stock),
+    expiry: product.expiry ? dateKey(product.expiry) : null,
+    active: product.active,
+  }
+}
+
+function applySnapshot(s: StoreState, snap: StoreSnapshot): Partial<StoreState> {
+  const products = snap.products.map(toUiProduct)
+  const known = new Set(products.map((p) => p.id))
+  const firstLoad = s.source !== 'live'
+  const keepLines = (lines: CartLine[]) => lines.filter((line) => known.has(line.productId))
+  return {
+    source: 'live',
+    liveSyncedAt: snap.serverTime,
+    liveError: null,
+    seededOn: snap.serverTime,
+    products,
+    transactions: snap.transactions,
+    history: snap.history,
+    waste: snap.waste,
+    requests: snap.requests,
+    employees: snap.employees,
+    // The store name is set on the server (first launch or Settings) so every PC and receipt shows the same one.
+    settings: { ...s.settings, vatRate: snap.vatRate, ...(snap.storeName ? { storeName: snap.storeName, businessName: snap.storeName } : {}) },
+    // Carts and purchase orders saved before the first load may point at products that don't exist, so they go.
+    cart: firstLoad ? [] : keepLines(s.cart),
+    heldCarts: firstLoad ? [] : s.heldCarts.map((h) => ({ ...h, lines: keepLines(h.lines) })).filter((h) => h.lines.length),
+    purchaseOrders: firstLoad ? [] : s.purchaseOrders,
+    ui: {
+      ...s.ui,
+      forecastProductId: known.has(s.ui.forecastProductId) ? s.ui.forecastProductId : products.find((p) => p.active)?.id ?? s.ui.forecastProductId,
+      selectedTxnId: snap.transactions.some((t) => t.id === s.ui.selectedTxnId) ? s.ui.selectedTxnId : null,
+      returnTxnId: snap.transactions.some((t) => t.id === s.ui.returnTxnId) ? s.ui.returnTxnId : null,
+    },
+  }
+}
+
+function useStoreValue() {
+  const [state, setState] = useState<StoreState>(loadState)
+  const [toasts, setToasts] = useState<Toast[]>([])
+  const saveTimer = useRef<number | undefined>(undefined)
+  const stateRef = useRef(state)
+
+  useEffect(() => { stateRef.current = state }, [state])
+
+  useEffect(() => {
+    window.clearTimeout(saveTimer.current)
+    saveTimer.current = window.setTimeout(() => {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)) } catch { /* ignore quota / private mode */ }
+    }, 300)
+  }, [state])
+
+  const toast = useCallback((message: string, tone: Toast['tone'] = 'success') => {
+    const id = Date.now() + Math.random()
+    setToasts((current) => [...current, { id, message, tone }])
+    window.setTimeout(() => setToasts((current) => current.filter((t) => t.id !== id)), 3200)
+  }, [])
+
+  /** Loads everything from the server. Returns false when the server can't be reached (the screens then keep what they have). */
+  const refreshLive = useCallback(async (): Promise<boolean> => {
+    try {
+      const snap = await getStoreSnapshot()
+      setState((s) => ({ ...s, ...applySnapshot(s, snap) }))
+      return true
+    } catch (error) {
+      setState((s) => (s.source === 'live' ? { ...s, liveError: apiErrorMessage(error) } : s))
+      return false
+    }
+  }, [])
+
+  // Once someone is signed in (owner) or assigned (cashier), switch to the server's data and keep it fresh.
+  // Retries with a growing delay while the server is unreachable, so a plain browser without the API stays on demo data.
+  useEffect(() => {
+    if (!state.sessionId) return
+    let stopped = false
+    let timer: number | undefined
+    let retry = 1_000
+    const tick = async () => {
+      const ok = await refreshLive()
+      if (stopped) return
+      retry = ok ? 1_000 : Math.min(retry * 2, 30_000)
+      timer = window.setTimeout(tick, ok ? LIVE_REFRESH_MS : retry)
+    }
+    void tick()
+    const onFocus = () => { void refreshLive() }
+    window.addEventListener('focus', onFocus)
+    return () => {
+      stopped = true
+      window.clearTimeout(timer)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [state.sessionId, refreshLive])
+
+  // The server's database was reset (or this PC now talks to another one): drop everything this PC saved for the
+  // old database — cached data, carts, settings, remembered username, sign-in — and start clean.
+  useEffect(() => {
+    getAuthStatus().then(({ install_id }) => {
+      if (!install_id) return
+      let known: string | null = null
+      try { known = localStorage.getItem(INSTALL_KEY) } catch { return }
+      if (known === install_id) return
+      try {
+        localStorage.setItem(INSTALL_KEY, install_id)
+        if (known === null && !Object.keys(localStorage).some((key) => key.startsWith('pos9010'))) return
+        for (const key of Object.keys(localStorage)) if (key.startsWith('pos9010') && key !== INSTALL_KEY) localStorage.removeItem(key)
+        for (const key of Object.keys(sessionStorage)) if (key.startsWith('pos9010')) sessionStorage.removeItem(key)
+      } catch { return }
+      window.location.reload()
+    }).catch(() => undefined)
+  }, [])
+
+  const actions = useMemo(() => {
+    const update = (fn: (s: StoreState) => Partial<StoreState>) => setState((s) => ({ ...s, ...fn(s) }))
+    const changeStock = (products: Product[], productId: string, delta: number) => products.map((p) => (p.id === productId ? { ...p, stock: Math.max(0, p.stock + delta) } : p))
+    const live = () => stateRef.current.source === 'live'
+    const replaceProduct = (saved: StoreProduct, oldId = saved.id) => update((s) => ({ products: s.products.map((p) => (p.id === oldId ? toUiProduct(saved) : p)) }))
+    const replaceTxn = (txn: Transaction) => update((s) => ({ transactions: s.transactions.some((t) => t.id === txn.id) ? s.transactions.map((t) => (t.id === txn.id ? txn : t)) : [...s.transactions, txn] }))
+    /**
+     * Live mode: the screen has already changed (so it feels instant); this saves the change on the server.
+     * If the server refuses it, the error is shown and the data is reloaded, which undoes the change on screen.
+     */
+    const save = (what: string, work: () => Promise<unknown>) => {
+      work().catch((error) => {
+        toast(`${what} was not saved: ${apiErrorMessage(error)}`, 'error')
+        void refreshLive()
+      })
+    }
+
+    return {
+      refreshLive,
+      navigate(workspace: WorkspaceName, ui?: Partial<UiState>) {
+        if (ui) update((s) => ({ ui: { ...s.ui, ...ui } }))
+        window.dispatchEvent(new CustomEvent('workspace-navigate', { detail: workspace }))
+      },
+      setUi: (ui: Partial<UiState>) => update((s) => ({ ui: { ...s.ui, ...ui } })),
+      /** Called when the owner signs in or the owner assigns a cashier to this terminal. Adds the person to the local employee list if needed. */
+      login: (person: { id: string; name: string; role: Role }) => update((s) => {
+        const now = new Date().toISOString()
+        const exists = s.employees.some((e) => e.id === person.id)
+        const employees = exists
+          ? s.employees.map((e) => (e.id === person.id ? { ...e, name: person.name, role: person.role, lastActive: now } : e))
+          : [...s.employees, { id: person.id, name: person.name, email: '', role: person.role, status: 'Active' as const, lastActive: now }]
+        return { sessionId: person.id, employees }
+      }),
+      logout: () => update(() => ({ sessionId: null })),
+
+      // ----- Cart -----
+      addToCart: (productId: string, qty = 1) => update((s) => {
+        const existing = s.cart.find((line) => line.productId === productId)
+        return { cart: existing ? s.cart.map((line) => (line.productId === productId ? { ...line, qty: line.qty + qty } : line)) : [...s.cart, { productId, qty }] }
+      }),
+      setCartQty: (productId: string, qty: number) => update((s) => ({ cart: qty <= 0 ? s.cart.filter((l) => l.productId !== productId) : s.cart.map((l) => (l.productId === productId ? { ...l, qty } : l)) })),
+      clearCart: () => update(() => ({ cart: [], customerType: 'Regular' })),
+      setCustomerType: (customerType: CustomerType) => update(() => ({ customerType })),
+      holdCart: (label: string) => update((s) => (s.cart.length ? { heldCarts: [...s.heldCarts, { id: uid('h'), label, lines: s.cart, customerType: s.customerType, heldAt: new Date().toISOString() }], cart: [], customerType: 'Regular' } : {})),
+      resumeCart: (id: string) => update((s) => {
+        const held = s.heldCarts.find((h) => h.id === id)
+        if (!held) return {}
+        const parked = s.cart.length ? [{ id: uid('h'), label: 'Parked sale', lines: s.cart, customerType: s.customerType, heldAt: new Date().toISOString() }] : []
+        return { cart: held.lines, customerType: held.customerType, heldCarts: [...s.heldCarts.filter((h) => h.id !== id), ...parked] }
+      }),
+      discardHeld: (id: string) => update((s) => ({ heldCarts: s.heldCarts.filter((h) => h.id !== id) })),
+
+      /**
+       * Completes the sale. Live: the server prices it, numbers the receipt and takes the stock; resolves to the
+       * saved receipt, or throws with the server's reason. Senior/PWD sales need the ID number and name (RA 9994 / RA 10754).
+       */
+      async checkout(payment: { method: PaymentMethod; tendered: number; reference?: string; seniorPwd?: { id: string; name: string } }): Promise<Transaction | null> {
+        const s = stateRef.current
+        if (!s.cart.length) return null
+        if (live()) {
+          const txn = await postSale({
+            lines: s.cart.map((line) => ({ product_id: line.productId, qty: line.qty })),
+            customer_type: s.customerType,
+            senior_pwd_id: payment.seniorPwd?.id,
+            senior_pwd_name: payment.seniorPwd?.name,
+            payment_method: payment.method,
+            amount_received: payment.tendered,
+            payment_reference: payment.reference,
+          })
+          update((current) => {
+            let products = current.products
+            for (const line of txn.lines) products = changeStock(products, line.productId, -line.qty)
+            return { products, transactions: [...current.transactions, txn], cart: [], customerType: 'Regular' }
+          })
+          return txn
+        }
+        const lines = s.cart.map((line) => {
+          const product = s.products.find((p) => p.id === line.productId)!
+          return { productId: product.id, name: product.name, qty: line.qty, price: product.price }
+        })
+        const totals = computeTotals(lines, s.customerType, s.settings.vatRate)
+        const txn: Transaction = {
+          id: uid('t'), number: `OR-${String(s.nextReceipt).padStart(6, '0')}`, date: new Date().toISOString(), cashierId: s.sessionId ?? 'e1',
+          customerType: s.customerType, lines, ...totals,
+          payment: { method: payment.method, tendered: payment.tendered, reference: payment.reference, change: Math.max(0, Math.round((payment.tendered - totals.total) * 100) / 100) },
+          status: 'Completed', refunds: [],
+        }
+        update((current) => {
+          let products = current.products
+          for (const line of lines) products = changeStock(products, line.productId, -line.qty)
+          return { products, transactions: [...current.transactions, txn], nextReceipt: current.nextReceipt + 1, cart: [], customerType: 'Regular' }
+        })
+        return txn
+      },
+
+      /** Returns items from a sale. The owner's PIN is checked by the server; resolves to the approving owner's name. */
+      async refund(txnId: string, lines: { productId: string; qty: number }[], reason: string, restock: boolean, ownerPin: string): Promise<string> {
+        if (live()) {
+          const result = await postRefund(txnId, ownerPin, { reason, restock, lines: lines.filter((l) => l.qty > 0).map((l) => ({ product_id: l.productId, qty: l.qty })) })
+          replaceTxn(result.transaction)
+          void refreshLive()
+          return result.approved_by
+        }
+        const approval = await verifyOwnerPin(ownerPin, 'refund')
+        update((s) => {
+          const txn = s.transactions.find((t) => t.id === txnId)
+          if (!txn) return {}
+          const ratio = txn.gross ? txn.total / txn.gross : 1
+          const refundLines = lines.filter((l) => l.qty > 0).map((l) => {
+            const sale = txn.lines.find((x) => x.productId === l.productId)!
+            return { productId: l.productId, qty: l.qty, amount: Math.round(sale.price * l.qty * ratio * 100) / 100 }
+          })
+          const amount = refundLines.reduce((sum, l) => sum + l.amount, 0)
+          const refunds = [...txn.refunds, { id: uid('r'), date: new Date().toISOString(), lines: refundLines, reason, restocked: restock, amount, by: s.sessionId ?? 'e1' }]
+          const returnedAll = txn.lines.every((line) => refunds.flatMap((r) => r.lines).filter((l) => l.productId === line.productId).reduce((sum, l) => sum + l.qty, 0) >= line.qty)
+          let products = s.products
+          let waste = s.waste
+          for (const l of refundLines) {
+            if (restock) products = changeStock(products, l.productId, l.qty)
+            else {
+              const product = s.products.find((p) => p.id === l.productId)
+              if (product) waste = [...waste, { id: uid('w'), productId: l.productId, qty: l.qty, reason: 'Customer return', value: product.cost * l.qty, date: new Date().toISOString(), by: s.sessionId ?? 'e1', notes: `${txn.number}: ${reason}` }]
+            }
+          }
+          return { products, waste, transactions: s.transactions.map((t) => (t.id === txnId ? { ...t, refunds, status: returnedAll ? 'Refunded' : 'Partially refunded' } : t)) }
+        })
+        return approval.owner_name
+      },
+
+      /** Cancels a whole sale and restocks it. The owner's PIN is checked by the server; resolves to the approving owner's name. */
+      async voidTransaction(txnId: string, ownerPin: string, reason: string): Promise<string> {
+        if (live()) {
+          const result = await postVoid(txnId, ownerPin, reason)
+          replaceTxn(result.transaction)
+          void refreshLive()
+          return result.approved_by
+        }
+        const approval = await verifyOwnerPin(ownerPin, 'void')
+        update((s) => {
+          const txn = s.transactions.find((t) => t.id === txnId)
+          if (!txn || txn.status === 'Voided') return {}
+          let products = s.products
+          for (const line of txn.lines) products = changeStock(products, line.productId, line.qty)
+          return { products, transactions: s.transactions.map((t) => (t.id === txnId ? { ...t, status: 'Voided' } : t)) }
+        })
+        return approval.owner_name
+      },
+
+      // ----- Inventory -----
+      saveProduct: (product: Product) => {
+        const isNew = !stateRef.current.products.some((p) => p.id === product.id)
+        update((s) => ({ products: isNew ? [...s.products, product] : s.products.map((p) => (p.id === product.id ? product : p)) }))
+        if (live()) save(product.name, async () => replaceProduct(isNew ? await postProduct(toPayload(product)) : await putProduct(product.id, toPayload(product)), product.id))
+      },
+      adjustStock: (productId: string, delta: number, reason = '') => {
+        update((s) => ({ products: changeStock(s.products, productId, delta) }))
+        if (live()) save('Stock change', async () => replaceProduct(await postStockChange(productId, delta, reason)))
+      },
+      logWaste: (entry: { productId: string; qty: number; reason: WasteReason; notes: string }) => {
+        const product = stateRef.current.products.find((p) => p.id === entry.productId)
+        if (!product) return
+        const tempId = uid('w')
+        const record: WasteEntry = { ...entry, id: tempId, value: product.cost * entry.qty, date: new Date().toISOString(), by: stateRef.current.sessionId ?? 'e1' }
+        update((s) => ({ waste: [...s.waste, record], products: changeStock(s.products, entry.productId, -entry.qty) }))
+        if (live()) {
+          save('Waste entry', async () => {
+            const saved = await postWaste({ product_id: entry.productId, qty: entry.qty, reason: entry.reason, notes: entry.notes })
+            update((s) => ({ waste: s.waste.map((w) => (w.id === tempId ? saved.entry : w)) }))
+            replaceProduct(saved.product)
+          })
+        }
+      },
+      markdown: (productId: string, percent: number) => {
+        const product = stateRef.current.products.find((p) => p.id === productId)
+        if (!product) return
+        const marked = { ...product, price: Math.round(product.price * (1 - percent) * 4) / 4 }
+        update((s) => ({ products: s.products.map((p) => (p.id === productId ? marked : p)) }))
+        if (live()) save('Markdown', async () => replaceProduct(await putProduct(productId, toPayload(marked))))
+      },
+
+      // ----- Purchasing (purchase orders are kept on this PC for now; received stock is saved to the server) -----
+      createPurchaseOrders(lines: { productId: string; qty: number }[], source: PurchaseOrder['source']) {
+        update((s) => {
+          const bySupplier = new Map<string, PurchaseOrder['lines']>()
+          for (const line of lines) {
+            const product = s.products.find((p) => p.id === line.productId)
+            if (!product || line.qty <= 0) continue
+            bySupplier.set(product.supplierId, [...(bySupplier.get(product.supplierId) ?? []), { productId: product.id, qty: line.qty, cost: product.cost }])
+          }
+          let sequence = 42 + s.purchaseOrders.length - 2
+          const created: PurchaseOrder[] = [...bySupplier].map(([supplierId, poLines]) => {
+            const lead = Math.max(...poLines.map((l) => s.products.find((p) => p.id === l.productId)?.leadTimeDays ?? 3))
+            sequence++
+            return { id: uid('po'), number: `PO-${new Date().getFullYear()}-${String(sequence).padStart(4, '0')}`, supplierId, created: new Date().toISOString(), expected: new Date(Date.now() + lead * DAY_MS).toISOString(), status: 'Draft', lines: poLines, source }
+          })
+          return { purchaseOrders: [...created, ...s.purchaseOrders] }
+        })
+      },
+      setPurchaseOrderStatus: (id: string, status: PurchaseOrder['status']) => {
+        const po = stateRef.current.purchaseOrders.find((p) => p.id === id)
+        if (!po) return
+        const receiving = status === 'Received' && po.status !== 'Received'
+        update((s) => {
+          let products = s.products
+          if (receiving) {
+            for (const line of po.lines) {
+              products = products.map((p) => (p.id === line.productId ? { ...p, stock: p.stock + line.qty, cost: line.cost } : p))
+            }
+          }
+          return { products, purchaseOrders: s.purchaseOrders.map((p) => (p.id === id ? { ...p, status } : p)) }
+        })
+        if (receiving && live()) {
+          save(`Delivery for ${po.number}`, async () => {
+            for (const line of po.lines) replaceProduct(await postStockChange(line.productId, line.qty, `Received ${po.number}`))
+          })
+        }
+      },
+
+      // ----- Requests -----
+      addRequest: (request: Omit<CustomerRequest, 'id' | 'date' | 'status'>) => {
+        const tempId = uid('q')
+        update((s) => ({ requests: [{ ...request, id: tempId, date: new Date().toISOString(), status: 'New' }, ...s.requests] }))
+        if (live()) {
+          save('Customer request', async () => {
+            const saved = await postRequest({ item: request.item, category: request.category, requested_by: request.requestedBy, contact: request.contact, notes: request.notes })
+            update((s) => ({ requests: s.requests.map((r) => (r.id === tempId ? saved : r)) }))
+          })
+        }
+      },
+      setRequestStatus: (ids: string[], status: RequestStatus) => {
+        update((s) => ({ requests: s.requests.map((r) => (ids.includes(r.id) ? { ...r, status } : r)) }))
+        if (live()) save('Request status', () => patchRequestStatus(ids, status))
+      },
+
+      // ----- People -----
+      saveEmployee: (employee: Employee) => {
+        const isNew = !stateRef.current.employees.some((e) => e.id === employee.id)
+        update((s) => ({ employees: isNew ? [...s.employees, employee] : s.employees.map((e) => (e.id === employee.id ? employee : e)) }))
+        if (live()) {
+          save(employee.name, async () => {
+            const body = { name: employee.name, email: employee.email, status: employee.status }
+            const saved = isNew ? await postEmployee(body) : await putEmployee(employee.id, body)
+            update((s) => ({ employees: s.employees.map((e) => (e.id === employee.id ? saved : e)) }))
+          })
+        }
+      },
+
+      // ----- Shift / drawer (kept on this PC for now) -----
+      cashMovement: (type: 'Cash in' | 'Cash out', amount: number, reason: string) => update((s) => ({ shift: { ...s.shift, movements: [...s.shift.movements, { id: uid('m'), date: new Date().toISOString(), type, amount, reason, by: s.sessionId ?? 'e1' }] } })),
+      closeShift: (countedCash: number) => update((s) => ({ shift: { ...s.shift, closedAt: new Date().toISOString(), countedCash } })),
+      openShift: (openingFloat: number) => update((s) => ({ shift: { id: uid('sh'), openedAt: new Date().toISOString(), openedBy: s.sessionId ?? 'e1', openingFloat, movements: [] } })),
+
+      updateSettings: (settings: Partial<Settings>) => {
+        const before = stateRef.current.settings.storeName
+        update((s) => ({ settings: { ...s.settings, ...settings } }))
+        // Only the store name is shared through the server for now; the other settings stay on this PC.
+        if (live() && settings.storeName && settings.storeName !== before) save('Store name', () => putStoreName(settings.storeName!.trim()))
+      },
+      toast,
+    }
+  }, [toast, refreshLive])
+
+  return { state, actions, toasts }
+}
+
+type StoreValue = ReturnType<typeof useStoreValue>
+
+export interface Analytics {
+  analyses: ProductAnalysis[]
+  byId: Map<string, ProductAnalysis>
+  insights: Insight[]
+  abc: Map<string, 'A' | 'B' | 'C'>
+}
+
+const StoreContext = createContext<StoreValue | null>(null)
+const AnalyticsContext = createContext<Analytics | null>(null)
+
+export function StoreProvider({ children }: { children: ReactNode }) {
+  const value = useStoreValue()
+  const { products, history, transactions, purchaseOrders, settings, waste, requests } = value.state
+  const analytics = useMemo<Analytics>(() => {
+    const now = new Date()
+    const analyses = products.filter((p) => p.active).map((product) => analyseProduct(product, history, transactions, purchaseOrders, settings, now))
+    return { analyses, byId: new Map(analyses.map((a) => [a.product.id, a])), insights: buildInsights(analyses, transactions, waste, requests, now), abc: abcClasses(analyses) }
+  }, [products, history, transactions, purchaseOrders, settings, waste, requests])
+
+  return <StoreContext.Provider value={value}><AnalyticsContext.Provider value={analytics}>{children}</AnalyticsContext.Provider></StoreContext.Provider>
+}
+
+export function useStore() {
+  const value = useContext(StoreContext)
+  if (!value) throw new Error('useStore must be used inside <StoreProvider>')
+  return value
+}
+
+export function useAnalytics() {
+  const value = useContext(AnalyticsContext)
+  if (!value) throw new Error('useAnalytics must be used inside <StoreProvider>')
+  return value
+}
+
+/** Workspaces a role may open: the role settings, minus owner-only workspaces for everyone but the owner. */
+export function allowedWorkspaces(settings: Settings, role: Role): WorkspaceName[] {
+  // Tabs always follow allWorkspaces' order. Saved settings can still name a workspace that has since been
+  // merged into another (e.g. Employees into Admin Station); those are dropped.
+  const saved = settings.rolePermissions[role] ?? []
+  const configured = allWorkspaces.filter((w) => saved.includes(w))
+  return role === 'Owner' ? configured : configured.filter((w) => !OWNER_ONLY_WORKSPACES.includes(w))
+}
+
+export function useCurrentUser() {
+  const { state } = useStore()
+  return state.employees.find((e) => e.id === state.sessionId) ?? null
+}

@@ -1,0 +1,12 @@
+{
+  "appId": "com.9010grocery.pos",
+  "productName": "9010 Grocery Store",
+  "directories": { "output": "release" },
+  "files": ["dist/**/*", "dist-electron/**/*", "!dist-electron/**/*.map", "package.json"],
+  "extraResources": [
+    { "from": "database", "to": "database", "filter": ["*.sql", "migrations/**"] },
+    { "from": "ml_service", "to": "ml_service", "filter": ["*.py", "requirements.txt"] }
+  ],
+  "win": { "target": "nsis" },
+  "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
+}

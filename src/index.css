@@ -27,9 +27,13 @@ html, body, #root { width: 100%; min-width: 320px; min-height: 100%; height: 100
 body { min-height: 100vh; overflow: hidden; }
 button, input, select, textarea { font: inherit; }
 button { color: inherit; }
-button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
-* { scrollbar-color: #586052 #242823; scrollbar-width: thin; }
+button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+/* Text fields light up inside their own border, so the ring never covers the label above or the hint below. */
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; border-color: var(--green) !important; box-shadow: inset 0 0 0 1px var(--green); }
+/* Chromium (Electron) ignores ::-webkit-scrollbar once scrollbar-width/-color are set, so those are only for Firefox. */
+@supports not selector(::-webkit-scrollbar) { * { scrollbar-color: #586052 #242823; scrollbar-width: thin; } }
 *::-webkit-scrollbar { width: 9px; height: 9px; }
+*::-webkit-scrollbar-button { display: none; }
 *::-webkit-scrollbar-track { background: #242823; }
 *::-webkit-scrollbar-thumb { border: 2px solid #242823; border-radius: 8px; background: #586052; }
 *::-webkit-scrollbar-thumb:hover { background: #78866b; }
@@ -63,25 +67,36 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 .workspace-tabs { position: relative; z-index: 10; height: 54px; flex: 0 0 54px; display: flex; min-width: 0; align-items: stretch; padding: 0 12px; border-bottom: 1px solid #343832; background: #292c27; }
 .workspace-tabs::-webkit-scrollbar { display: none; }
-.workspace-tab-list { display: flex; flex: 1 1 auto; min-width: 0; align-items: stretch; overflow-x: auto; scrollbar-width: none; }
+.workspace-tab-strip { position: relative; display: flex; flex: 1 1 auto; min-width: 0; align-items: stretch; }
+.workspace-tab-list { display: flex; flex: 1 1 auto; min-width: 0; align-items: stretch; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none; }
 .workspace-tab-list::-webkit-scrollbar { display: none; }
+.workspace-tab-strip.more-left .workspace-tab-list { -webkit-mask-image: linear-gradient(to right, transparent 0, #000 36px); mask-image: linear-gradient(to right, transparent 0, #000 36px); }
+.workspace-tab-strip.more-right .workspace-tab-list { -webkit-mask-image: linear-gradient(to left, transparent 0, #000 36px); mask-image: linear-gradient(to left, transparent 0, #000 36px); }
+.workspace-tab-strip.more-left.more-right .workspace-tab-list { -webkit-mask-image: linear-gradient(to right, transparent 0, #000 36px, #000 calc(100% - 36px), transparent 100%); mask-image: linear-gradient(to right, transparent 0, #000 36px, #000 calc(100% - 36px), transparent 100%); }
+.tab-scroll { position: absolute; z-index: 2; top: 50%; width: 22px; height: 30px; display: grid; place-items: center; padding: 0 0 2px; border: 1px solid #454b42; border-radius: 3px; color: #c9cec4; background: #292c27; font-size: 16px; line-height: 1; transform: translateY(-50%); cursor: pointer; }
+.tab-scroll:hover { border-color: #737e69; color: var(--paper); background: #33372f; }
+.tab-scroll.left { left: 0; }
+.tab-scroll.right { right: 0; }
 .tab-caption { align-self: center; margin: 0 14px 0 4px; color: #747a71; white-space: nowrap; font-size: 8px; font-weight: 800; letter-spacing: 1.15px; }
 .workspace-tab { position: relative; flex: 0 0 auto; padding: 0 12px; border: 0; background: transparent; color: #9da298; white-space: nowrap; font-size: 10px; font-weight: 700; cursor: pointer; transition: color .15s, background .15s; }
 .workspace-tab:hover { color: #e0e2dc; background: #ffffff08; }
 .workspace-tab.active { color: #e7eadf; background: #1f221e; }
-.workspace-tab.active::after { position: absolute; right: 11px; bottom: -1px; left: 11px; height: 2px; background: var(--green); content: ''; }
+.workspace-tab.active::after { position: absolute; right: 11px; bottom: 0; left: 11px; height: 2px; background: var(--green); content: ''; }
 .tab-add, .workspace-tools button { width: 29px; flex: 0 0 29px; border: 0; color: #92988e; background: transparent; font-size: 17px; cursor: pointer; }
 .tab-add:hover, .workspace-tools button:hover { color: var(--paper); }
 
 .workspace-titlebar { min-height: 44px; flex: 0 0 44px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 20px; border-bottom: 1px solid #343832; background: #1f221e; }
 .workspace-titlebar > div:first-child, .title-actions { min-width: 0; display: flex; align-items: center; gap: 11px; }
 .crumb, .title-detail, .crumb-separator { color: #81877e; font-size: 9px; }
-.workspace-titlebar > div:first-child > b { font: 700 10px 'Space Grotesk', sans-serif; letter-spacing: .75px; }
+.workspace-titlebar > div:first-child > b { flex: 0 0 auto; white-space: nowrap; font: 700 10px 'Space Grotesk', sans-serif; letter-spacing: .75px; }
+.crumb, .crumb-separator { flex: 0 0 auto; white-space: nowrap; }
+.title-actions { flex: 0 0 auto; }
+.cashier-chip { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .crumb-separator { color: #4e554c; }
 .title-detail { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sync-status { display: flex; align-items: center; gap: 6px; white-space: nowrap; color: #858b81; font-size: 8px; font-weight: 700; letter-spacing: .65px; }
 .sync-status i { width: 5px; height: 5px; }
-.quiet-button { padding: 5px 8px; border: 1px solid #41463f; border-radius: 3px; color: #aeb3aa; background: transparent; font-size: 9px; cursor: pointer; }
+.quiet-button { flex: 0 0 auto; white-space: nowrap; padding: 5px 8px; border: 1px solid #41463f; border-radius: 3px; color: #aeb3aa; background: transparent; font-size: 9px; cursor: pointer; }
 .quiet-button:hover, .outline-button:hover { border-color: #737e69; color: var(--paper); }
 
 .area-canvas { position: relative; display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; padding: 8px; background: #171916; }
@@ -99,7 +114,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .editor-type-icon { width: 15px; flex: 0 0 15px; color: var(--green); text-align: center; font-size: 13px; }
 .editor-type-trigger > span:nth-child(2) { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .editor-type-caret { margin-left: auto; color: #878f82; font-size: 12px; }
-.editor-type-menu { position: fixed; z-index: 1000; width: min(240px, calc(100vw - 16px)); max-height: min(72vh, 560px); overflow: auto; padding: 5px; border: 1px solid #4b5148; border-radius: 3px; background: #282c27; box-shadow: 0 12px 30px #0008; }
+.editor-type-menu { position: fixed; z-index: 1000; width: min(240px, calc(100vw - 16px)); max-height: min(72vh, 560px); overflow: auto; overscroll-behavior: contain; padding: 5px; border: 1px solid #4b5148; border-radius: 3px; background: #282c27; box-shadow: 0 12px 30px #0008; }
 .editor-menu-group + .editor-menu-group { margin-top: 4px; padding-top: 4px; border-top: 1px solid #3c423a; }
 .editor-menu-group h3 { margin: 3px 7px 4px; color: #858d81; font: 800 7px 'Space Grotesk', sans-serif; letter-spacing: 1px; text-transform: uppercase; }
 .editor-menu-item { width: 100%; min-height: 29px; display: flex; align-items: center; gap: 8px; padding: 4px 7px; border: 0; border-radius: 2px; color: #c4c9bf; text-align: left; background: transparent; font-size: 9px; cursor: pointer; }
@@ -150,7 +165,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .open-status { display: flex; align-items: center; gap: 7px; padding: 6px 8px; border: 1px solid #495443; color: #b7cba5; font: 800 8px 'Space Grotesk', sans-serif; letter-spacing: .6px; }
 .open-status i { background: var(--green); }
 .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.metric-card { position: relative; min-width: 0; min-height: 117px; overflow: hidden; padding: 13px 14px; border: 1px solid #3b4039; background: #282c27; }
+.metric-card { position: relative; min-width: 0; container-type: inline-size; min-height: 117px; overflow: hidden; padding: 13px 14px; border: 1px solid #3b4039; background: #282c27; }
 .metric-top { display: flex; justify-content: space-between; align-items: center; color: #aeb4a9; font-size: 9px; }
 .metric-top i { color: #717970; font-size: 11px; font-style: normal; }
 .metric-card > strong { display: block; margin-top: 14px; color: #e8ebe4; font: 600 25px 'Space Grotesk', sans-serif; }
@@ -357,7 +372,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .model-foot button { border: 0; color: #a5b993; background: transparent; font: inherit; cursor: pointer; }
 
 .module-panel { display: flex; flex-direction: column; padding: clamp(13px, 2vw, 23px); overflow: auto; }
-.module-intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.module-intro { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+/* The text takes the spare width; when the panel is too narrow the buttons move below it as one row instead of stacking. */
+.module-intro > div:first-child { flex: 1 1 260px; min-width: 0; }
+.module-intro > .intro-actions { flex: 0 0 auto; flex-wrap: nowrap; }
+.intro-actions > button { white-space: nowrap; }
 .module-intro h2 { margin-bottom: 4px; font-size: 18px; }
 .module-intro p { max-width: 520px; line-height: 1.5; }
 .module-panel > .data-table-wrap { margin-top: 5px; }
@@ -405,6 +424,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 .status-bar { height: 23px; flex: 0 0 23px; display: flex; align-items: center; gap: 17px; padding: 0 11px; border-top: 1px solid #353a33; color: #8b9287; background: #252824; font: 700 7px 'Space Grotesk', sans-serif; letter-spacing: .6px; }
 .status-bar > span { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.status-offline, .status-demo { width: 6px; height: 6px; display: inline-block; border-radius: 50%; }
+.status-offline { background: var(--red); box-shadow: 0 0 8px #e07d7066; }
+.status-demo { background: var(--orange); }
 .status-bar b { color: #62695f; }
 .status-bar .status-right { margin-left: auto; }
 .status-right b { color: #989f94; font-weight: 600; }
@@ -415,7 +437,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 	.store-context { display: none; }
 	.account-context { gap: 5px; margin-left: 0; }
 	.account-context > span:last-of-type, .account-context > span:last-child { display: none; }
-	.tab-caption { margin-right: 5px; }
+	.tab-caption, .brand-lockup > div:last-child { display: none; }
+	.workspace-tab-strip { margin-left: 6px; }
+	.crumb, .crumb-separator, .title-detail { display: none; }
 	.workspace-tab { padding: 0 9px; }
 	.workspace-titlebar { padding: 0 11px; }
 	.area-canvas { padding: 5px; }
@@ -429,7 +453,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 @media (max-width: 540px) {
 	.workbench { min-height: 420px; }
-	.account-clock { margin-right: 0; padding-right: 0; border-right: 0; }
+	.account-clock, .sync-status { display: none; }
 	.workspace-titlebar { min-height: 38px; flex-basis: 38px; }
 	.title-actions { gap: 4px; }
 	.area-header { height: 32px; flex-basis: 32px; padding: 0 16px 0 4px; }
@@ -464,4 +488,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 	.wma-evidence button { margin-left: 36px; }
 	.status-bar { gap: 8px; padding: 0 6px; font-size: 6px; }
 	.status-bar > span:nth-child(2) { display: none; }
+}
+
+/* A KPI card can be narrow on a wide screen too (split panels), so the sparkline hides by card width, not screen width. */
+@container (max-width: 210px) {
+	.metric-sparkline, .metric-spark { display: none; }
 }
