@@ -3,6 +3,8 @@ import type { PaymentMethod, Transaction } from '../../data/types'
 import { basketRules } from '../../lib/ai'
 import { peso, shortDate, time } from '../../lib/format'
 import { computeTotals, quickCashOptions } from '../../lib/pos'
+import { useHorizontalScroll } from '../../hooks/useHorizontalScroll'
+import { apiErrorMessage } from '../../services/api'
 import { useCurrentUser, useStore } from '../../store/StoreContext'
 import { Field, Modal, Segmented } from '../ui'
 
@@ -11,6 +13,7 @@ export function ProductGrid() {
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('All items')
   const inputRef = useRef<HTMLInputElement>(null)
+  const pills = useHorizontalScroll<HTMLDivElement>()
   const products = state.products.filter((p) => p.active)
   const categories = ['All items', ...new Set(products.map((p) => p.category))]
   const q = query.trim().toLowerCase()
@@ -41,7 +44,7 @@ export function ProductGrid() {
       <label className="search-field"><span>⌕</span><input ref={inputRef} autoFocus placeholder="Search products, type SKU or scan barcode, then Enter" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') onScan(); if (e.key === 'Escape') setQuery('') }} /><kbd>ENTER</kbd></label>
       <button className="scan-button" title="Simulate barcode scan" aria-label="Simulate barcode scan" onClick={() => { const p = products[Math.floor(Math.random() * products.length)]; setQuery(p.barcode); inputRef.current?.focus() }}>▥</button>
     </div>
-    <div className="category-pills">{categories.map((item) => <button key={item} className={category === item ? 'selected' : ''} onClick={() => setCategory(item)}>{item}</button>)}</div>
+    <div className="category-pills" ref={pills.attach}>{categories.map((item) => <button key={item} className={category === item ? 'selected' : ''} onClick={() => setCategory(item)}>{item}</button>)}</div>
     <div className="product-grid">{filtered.map((product) => <button className={product.stock <= 0 ? 'product-card sold-out' : 'product-card'} disabled={product.stock <= 0} key={product.id} onClick={() => add(product.id)}>
       <span className={`product-image ${product.color}`}><i>{product.symbol}</i><small>{product.category.toUpperCase()}</small></span>
       <span className="product-info"><b>{product.name}</b><span>{peso(product.price)}</span><small className={product.stock <= product.reorderPoint ? 'stock-low' : ''}>{product.stock <= 0 ? 'Out of stock' : `${product.stock} in stock`}</small></span>
@@ -107,22 +110,45 @@ function PaymentModal({ total, onClose, onPaid }: { total: number; onClose: () =
   const [method, setMethod] = useState<PaymentMethod>(methods[0] ?? 'Cash')
   const [tendered, setTendered] = useState('')
   const [reference, setReference] = useState('')
+  // Senior/PWD sales must record the ID number and name on the card (RA 9994 / RA 10754).
+  const discounted = state.customerType !== 'Regular'
+  const [seniorPwd, setSeniorPwd] = useState({ id: '', name: '' })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const cash = Number(tendered) || 0
-  const valid = method === 'Cash' ? cash >= total : reference.trim().length >= 4
+  const valid = (method === 'Cash' ? cash >= total : reference.trim().length >= 4) && (!discounted || (seniorPwd.id.trim().length >= 3 && seniorPwd.name.trim().length >= 2))
 
-  function pay() {
-    if (!valid) return
-    const txn = actions.checkout({ method, tendered: method === 'Cash' ? cash : total, reference: method === 'Cash' ? undefined : reference.trim() })
-    if (txn) onPaid(txn)
+  async function pay() {
+    if (!valid || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const txn = await actions.checkout({
+        method,
+        tendered: method === 'Cash' ? cash : total,
+        reference: method === 'Cash' ? undefined : reference.trim(),
+        seniorPwd: discounted ? { id: seniorPwd.id.trim(), name: seniorPwd.name.trim() } : undefined,
+      })
+      if (txn) onPaid(txn)
+    } catch (err) {
+      setError(`Sale not completed: ${apiErrorMessage(err)}`)
+    } finally {
+      setBusy(false)
+    }
   }
 
-  return <Modal title={`Collect ${peso(total)}`} eyebrow="PAYMENT" onClose={onClose} footer={<><button className="outline-button" onClick={onClose}>CANCEL</button><button className="primary-button" disabled={!valid} onClick={pay}>COMPLETE SALE →</button></>}>
+  return <Modal title={`Collect ${peso(total)}`} eyebrow="PAYMENT" onClose={onClose} footer={<><button className="outline-button" disabled={busy} onClick={onClose}>CANCEL</button><button className="primary-button" disabled={!valid || busy} onClick={() => void pay()}>{busy ? 'SAVING…' : 'COMPLETE SALE →'}</button></>}>
+    {discounted && <div className="form-row">
+      <Field label={`${state.customerType === 'PWD' ? 'PWD' : 'SENIOR CITIZEN'} ID NO.`}><input value={seniorPwd.id} maxLength={50} onChange={(e) => setSeniorPwd({ ...seniorPwd, id: e.target.value })} /></Field>
+      <Field label="NAME ON ID"><input value={seniorPwd.name} maxLength={100} onChange={(e) => setSeniorPwd({ ...seniorPwd, name: e.target.value })} /></Field>
+    </div>}
     <div className="pay-methods">{methods.map((m) => <button key={m} className={method === m ? 'selected' : ''} onClick={() => setMethod(m)}><b>{m === 'Cash' ? '₱' : m === 'Card' ? '▭' : '◉'}</b>{m}</button>)}</div>
     {method === 'Cash' ? <>
-      <Field label="CASH RECEIVED"><input autoFocus inputMode="decimal" value={tendered} placeholder="0.00" onChange={(e) => setTendered(e.target.value.replace(/[^\d.]/g, ''))} onKeyDown={(e) => { if (e.key === 'Enter') pay() }} /></Field>
+      <Field label="CASH RECEIVED"><input autoFocus inputMode="decimal" value={tendered} placeholder="0.00" onChange={(e) => setTendered(e.target.value.replace(/[^\d.]/g, ''))} onKeyDown={(e) => { if (e.key === 'Enter') void pay() }} /></Field>
       <div className="quick-cash">{quickCashOptions(total).map((amount) => <button key={amount} onClick={() => setTendered(String(amount))}>{peso(amount, amount % 1 ? 2 : 0)}</button>)}</div>
       <div className={cash >= total ? 'change-due ok' : 'change-due'}><span>{cash >= total ? 'CHANGE DUE' : 'REMAINING'}</span><strong>{peso(Math.abs(cash - total))}</strong></div>
-    </> : <Field label={method === 'Card' ? 'APPROVAL CODE' : `${method.toUpperCase()} REFERENCE NO.`} hint="Enter the reference shown on the customer's confirmation (min. 4 characters)."><input autoFocus value={reference} onChange={(e) => setReference(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') pay() }} /></Field>}
+    </> : <Field label={method === 'Card' ? 'APPROVAL CODE' : `${method.toUpperCase()} REFERENCE NO.`} hint="Enter the reference shown on the customer's confirmation (min. 4 characters)."><input autoFocus value={reference} onChange={(e) => setReference(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') void pay() }} /></Field>}
+    {error && <p className="pin-error" role="alert">{error}</p>}
   </Modal>
 }
 

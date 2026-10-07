@@ -1,6 +1,7 @@
-export type Role = 'Owner' | 'Cashier' | 'Inventory Clerk'
+export type Role = 'Owner' | 'Cashier'
 
 export type WorkspaceName =
+  | 'Admin Station'
   | 'Dashboard'
   | 'Point of Sale'
   | 'Transactions'
@@ -10,7 +11,6 @@ export type WorkspaceName =
   | 'Reports'
   | 'Waste'
   | 'Requests'
-  | 'Employees'
   | 'Settings'
 
 export interface Product {
@@ -44,7 +44,6 @@ export interface Employee {
   name: string
   email: string
   role: Role
-  pin: string
   status: 'Active' | 'On leave' | 'Inactive'
   lastActive: string
 }

@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { categories, colorForCategory, suppliers } from '../../data/mockData'
+import { categories, colorForCategory } from '../../data/defaults'
 import type { Product } from '../../data/types'
-import { compactPeso, downloadCsv, num, peso, shortDate } from '../../lib/format'
+import { compactPeso, dateKey, downloadCsv, num, peso, shortDate } from '../../lib/format'
 import { useAnalytics, useStore, type UiState } from '../../store/StoreContext'
 import { Empty, Field, Metric, Modal, Segmented, StatusPill } from '../ui'
 import { Pager } from './Transactions'
@@ -96,16 +96,20 @@ export function InventoryTable() {
 function ProductModal({ product, onClose }: { product: Product | null; onClose: () => void }) {
   const { state, actions } = useStore()
   const [draft, setDraft] = useState<Product>(() => product ?? {
-    id: `p${Date.now().toString(36)}`, sku: `SKU-${String(state.products.length + 1).padStart(4, '0')}`, barcode: '', name: '', category: categories[0], unit: 'pc', price: 0, cost: 0, stock: 0,
-    reorderPoint: 5, leadTimeDays: 3, supplierId: suppliers[0].id, expiry: null, color: colorForCategory(categories[0]), symbol: '', active: true,
+    id: `p${Date.now().toString(36)}`, sku: `SKU-${String(state.products.length + 1).padStart(4, '0')}`, barcode: '', name: '', category: '', unit: 'pc', price: 0, cost: 0, stock: 0,
+    reorderPoint: 5, leadTimeDays: 3, supplierId: '', expiry: null, color: colorForCategory(''), symbol: '', active: true,
   })
   const set = <K extends keyof Product>(key: K, value: Product[K]) => setDraft((d) => ({ ...d, [key]: value }))
   const margin = draft.price ? (draft.price / (1 + state.settings.vatRate) - draft.cost) / (draft.price / (1 + state.settings.vatRate)) : 0
   const valid = draft.name.trim() && draft.price > 0
+  // Suggestions: what other products already use, plus the usual grocery categories. Anything can be typed.
+  const knownCategories = [...new Set([...state.products.map((p) => p.category), ...categories])].filter(Boolean).sort()
+  const knownSuppliers = [...new Set(state.products.map((p) => p.supplierId))].filter(Boolean).sort()
 
   function save() {
     if (!valid) return
-    actions.saveProduct({ ...draft, name: draft.name.trim(), symbol: draft.name.trim()[0].toUpperCase(), color: colorForCategory(draft.category) })
+    const category = draft.category.trim() || 'Uncategorized'
+    actions.saveProduct({ ...draft, name: draft.name.trim(), category, supplierId: draft.supplierId.trim(), symbol: draft.name.trim()[0].toUpperCase(), color: colorForCategory(category) })
     actions.toast(product ? 'Product updated' : 'Product added to catalog')
     onClose()
   }
@@ -113,7 +117,7 @@ function ProductModal({ product, onClose }: { product: Product | null; onClose: 
   return <Modal title={product ? `Edit ${product.name}` : 'Add product'} eyebrow="CATALOG" wide onClose={onClose} footer={<>{product && <button className="outline-button" onClick={() => { actions.saveProduct({ ...draft, active: !draft.active }); onClose() }}>{draft.active ? 'ARCHIVE' : 'RESTORE'}</button>}<span className="spacer" /><button className="outline-button" onClick={onClose}>CANCEL</button><button className="primary-button" disabled={!valid} onClick={save}>SAVE PRODUCT</button></>}>
     <div className="form-grid">
       <Field label="PRODUCT NAME"><input autoFocus value={draft.name} onChange={(e) => set('name', e.target.value)} /></Field>
-      <Field label="CATEGORY"><select value={draft.category} onChange={(e) => set('category', e.target.value)}>{categories.map((c) => <option key={c}>{c}</option>)}</select></Field>
+      <Field label="CATEGORY"><input list="product-categories" value={draft.category} placeholder="e.g. Canned Goods" onChange={(e) => set('category', e.target.value)} /><datalist id="product-categories">{knownCategories.map((c) => <option key={c} value={c} />)}</datalist></Field>
       <Field label="SKU"><input value={draft.sku} onChange={(e) => set('sku', e.target.value)} /></Field>
       <Field label="BARCODE"><input value={draft.barcode} inputMode="numeric" onChange={(e) => set('barcode', e.target.value.replace(/\D/g, ''))} /></Field>
       <Field label="SELLING PRICE (VAT INCL.)"><input type="number" min={0} step={0.25} value={draft.price} onChange={(e) => set('price', Number(e.target.value))} /></Field>
@@ -121,9 +125,9 @@ function ProductModal({ product, onClose }: { product: Product | null; onClose: 
       <Field label="UNIT"><input value={draft.unit} onChange={(e) => set('unit', e.target.value)} /></Field>
       <Field label="ON HAND"><input type="number" min={0} value={draft.stock} onChange={(e) => set('stock', Number(e.target.value))} /></Field>
       <Field label="MIN. REORDER POINT" hint="AI raises this when forecast demand is higher."><input type="number" min={0} value={draft.reorderPoint} onChange={(e) => set('reorderPoint', Number(e.target.value))} /></Field>
-      <Field label="SUPPLIER"><select value={draft.supplierId} onChange={(e) => { const s = suppliers.find((x) => x.id === e.target.value)!; setDraft((d) => ({ ...d, supplierId: s.id, leadTimeDays: s.leadTimeDays })) }}>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></Field>
+      <Field label="SUPPLIER"><input list="product-suppliers" value={draft.supplierId} placeholder="Supplier name" onChange={(e) => set('supplierId', e.target.value)} /><datalist id="product-suppliers">{knownSuppliers.map((name) => <option key={name} value={name} />)}</datalist></Field>
       <Field label="LEAD TIME (DAYS)"><input type="number" min={0} value={draft.leadTimeDays} onChange={(e) => set('leadTimeDays', Number(e.target.value))} /></Field>
-      <Field label="NEAREST EXPIRY"><input type="date" value={draft.expiry ? draft.expiry.slice(0, 10) : ''} onChange={(e) => set('expiry', e.target.value ? new Date(`${e.target.value}T00:00:00`).toISOString() : null)} /></Field>
+      <Field label="NEAREST EXPIRY"><input type="date" value={draft.expiry ? dateKey(draft.expiry) : ''} onChange={(e) => set('expiry', e.target.value ? new Date(`${e.target.value}T00:00:00`).toISOString() : null)} /></Field>
     </div>
   </Modal>
 }
@@ -134,7 +138,7 @@ function AdjustModal({ product, onClose }: { product: Product; onClose: () => vo
   const [qty, setQty] = useState(0)
   const [note, setNote] = useState('')
   const delta = mode === 'Receive' ? qty : mode === 'Remove' ? -qty : qty - product.stock
-  return <Modal title={`Adjust stock · ${product.name}`} eyebrow="STOCK MOVEMENT" onClose={onClose} footer={<><button className="outline-button" onClick={onClose}>CANCEL</button><button className="primary-button" disabled={delta === 0} onClick={() => { actions.adjustStock(product.id, delta); actions.toast(`${product.name}: ${delta > 0 ? '+' : ''}${delta} ${product.unit}s`); onClose() }}>APPLY {delta > 0 ? '+' : ''}{delta}</button></>}>
+  return <Modal title={`Adjust stock · ${product.name}`} eyebrow="STOCK MOVEMENT" onClose={onClose} footer={<><button className="outline-button" onClick={onClose}>CANCEL</button><button className="primary-button" disabled={delta === 0} onClick={() => { actions.adjustStock(product.id, delta, [mode, note.trim()].filter(Boolean).join(': ')); actions.toast(`${product.name}: ${delta > 0 ? '+' : ''}${delta} ${product.unit}s`); onClose() }}>APPLY {delta > 0 ? '+' : ''}{delta}</button></>}>
     <Segmented label="Adjustment type" options={['Receive', 'Count', 'Remove'] as const} value={mode} onChange={(m) => { setMode(m); setQty(m === 'Count' ? product.stock : 0) }} />
     <div className="form-grid">
       <Field label={mode === 'Count' ? 'COUNTED ON SHELF' : 'QUANTITY'}><input autoFocus type="number" min={0} value={qty} onChange={(e) => setQty(Math.max(0, Number(e.target.value)))} /></Field>

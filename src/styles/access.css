@@ -1,0 +1,89 @@
+/* Owner sign-in, terminal lock screen, device setup and Admin Station.
+   Uses the same tokens and building blocks as the rest of the workspace (index.css, screens.css). */
+
+/* ---------- Splash ---------- */
+.app-splash { height: 100dvh; display: grid; place-content: center; gap: 8px; text-align: center; background: var(--bg); }
+.app-splash p { margin: 0; color: var(--muted); font-size: 12px; }
+
+/* ---------- Owner sign-in ---------- */
+.login-username { width: min(260px, 100%); display: flex; flex-direction: column; gap: 5px; }
+.login-username label { color: #8e958a; font: 800 8px 'Space Grotesk', sans-serif; letter-spacing: 1.1px; }
+.login-username input { height: 38px; padding: 0 11px; border: 1px solid #40463e; color: var(--paper); background: #252824; font-size: 13px; }
+.login-username input:focus { outline: none; border-color: var(--green); }
+.pin-caption.error { color: var(--red); }
+.pin-caption.locked { max-width: 280px; color: var(--orange); text-align: center; line-height: 1.5; }
+.pin-pad button:disabled { opacity: .5; cursor: wait; }
+
+/* ---------- Terminal lock screen ---------- */
+.terminal-lock .login-hero h1 { letter-spacing: 2px; }
+.lock-panel { text-align: center; }
+.lock-title { margin: 0; color: #eef0ea; font: 600 clamp(20px, 2.6vw, 28px)/1.2 'Space Grotesk', sans-serif; }
+.lock-panel .pin-caption { max-width: 320px; line-height: 1.6; }
+.lock-mark { position: relative; width: 64px; height: 64px; display: grid; place-items: center; border: 2px solid var(--green); border-radius: 50%; }
+.lock-mark span { width: 18px; height: 18px; background: var(--green); border-radius: 50%; animation: lock-pulse 1.6s ease-in-out infinite; }
+.lock-mark.offline { border-color: var(--orange); }
+.lock-mark.offline span { background: var(--orange); }
+@keyframes lock-pulse { 0%, 100% { opacity: .35; transform: scale(.75); } 50% { opacity: 1; transform: scale(1); } }
+.lock-connection { display: flex; align-items: center; gap: 7px; max-width: 360px; padding: 8px 11px; border: 1px solid #5c4a3a; color: #e4b27f; background: #2f2a24; font-size: 10px; text-align: left; }
+.lock-connection i { flex: 0 0 auto; width: 7px; height: 7px; background: var(--orange); border-radius: 50%; }
+.lock-connection.ok { border-color: #3f4d37; color: #b8d39f; background: #262d22; }
+.lock-connection.ok i { background: var(--green); }
+@media (prefers-reduced-motion: reduce) { .lock-mark span { animation: none; } }
+
+/* ---------- Device setup ---------- */
+.setup-panel { gap: 14px; }
+.setup-form { width: min(380px, 100%); display: grid; gap: 4px; }
+.pin-error { margin: 6px 0 0; color: var(--red); font-size: 11px; }
+
+/* ---------- Workspace: cashier header + account menu ---------- */
+.cashier-chip { display: inline-flex; align-items: center; gap: 4px; margin-left: 12px; padding: 3px 8px; border: 1px solid #4e6244; color: #b8d39f; background: #2b3527; font-size: 10px; }
+.cashier-chip b { color: #e6efdc; }
+.cashier-chip em { color: var(--orange); font-style: normal; }
+.account-menu-note { margin: 4px 0 2px; padding: 8px 10px; color: var(--muted); font-size: 10px; line-height: 1.4; }
+
+/* ---------- Admin Station ---------- */
+.admin-station .terminal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin: 12px 0 16px; }
+.terminal-card { display: flex; flex-direction: column; gap: 9px; padding: 12px; border: 1px solid var(--line); background: var(--surface); }
+.terminal-card.assigned { border-color: #4e6244; background: #262d22; }
+.terminal-card header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.terminal-card header b { display: block; color: #eef0ea; font: 700 18px 'Space Grotesk', sans-serif; letter-spacing: .5px; }
+.terminal-card header small { color: var(--faint); font-size: 10px; }
+.terminal-online { display: inline-flex; align-items: center; gap: 5px; color: var(--faint); font: 800 8px 'Space Grotesk', sans-serif; letter-spacing: .8px; }
+.terminal-online i { width: 7px; height: 7px; background: #5b6157; border-radius: 50%; }
+.terminal-online.on { color: #b8d39f; }
+.terminal-online.on i { background: var(--green); box-shadow: 0 0 0 3px #9bc77733; }
+.terminal-cashier { display: flex; align-items: center; gap: 9px; }
+.terminal-cashier small { display: block; color: var(--faint); font: 800 8px 'Space Grotesk', sans-serif; letter-spacing: .8px; }
+.terminal-cashier b { color: #eef0ea; font-size: 13px; }
+.terminal-meta, .terminal-locked, .terminal-seen { margin: 0; color: var(--muted); font-size: 10px; }
+.terminal-locked { color: #a2a99e; }
+.terminal-seen { color: var(--faint); font-size: 9px; }
+.terminal-footer { display: flex; align-items: center; gap: 12px; margin-top: auto; }
+.terminal-footer > .link-button { flex: 0 0 auto; white-space: nowrap; }
+.terminal-footer .terminal-seen { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.terminal-card.disabled { border-style: dashed; opacity: .6; }
+.terminal-form { display: flex; flex-direction: column; gap: 12px; }
+.danger-link { margin-right: auto; color: var(--red); }
+.terminal-assign { display: flex; gap: 6px; }
+.terminal-assign .select { flex: 1; min-width: 0; }
+.terminal-assign.compact .select { max-width: 120px; }
+.session-list { margin: 6px 0 16px; }
+.admin-station .data-table td small { display: block; color: var(--faint); font-size: 9px; }
+
+/* ---------- Who is using this PC (server PC) ---------- */
+.who-panel { gap: 16px; }
+.who-choices { width: min(420px, 100%); display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.who-choice { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 18px 16px; border: 1px solid #40463e; border-radius: 3px; color: var(--paper); background: #252824; text-align: left; cursor: pointer; }
+.who-choice:hover, .who-choice:focus-visible { border-color: var(--green); background: #2b3027; }
+.who-choice b { font: 600 15px 'Space Grotesk', sans-serif; }
+.who-choice small { color: #8e958a; font-size: 10px; line-height: 1.4; }
+.who-icon { width: 32px; height: 32px; display: grid; place-items: center; margin-bottom: 4px; border: 1px solid #4e6244; border-radius: 50%; color: var(--green); font-size: 15px; }
+.who-terminals { width: min(420px, 100%); display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+.who-terminal { display: flex; flex-direction: column; gap: 3px; padding: 12px; border: 1px solid #40463e; border-radius: 3px; color: var(--paper); background: #252824; text-align: left; cursor: pointer; }
+.who-terminal:hover:not(:disabled) { border-color: var(--green); background: #2b3027; }
+.who-terminal:disabled { opacity: .5; cursor: not-allowed; }
+.who-terminal b { font: 700 16px 'Space Grotesk', sans-serif; letter-spacing: .5px; }
+.who-terminal small { color: #8e958a; font-size: 9px; }
+.who-terminal em { color: #b9a07e; font-size: 9px; font-style: normal; }
+.lock-switch { margin-top: 4px; }
+@media (max-width: 420px) { .who-choices { grid-template-columns: 1fr; } }

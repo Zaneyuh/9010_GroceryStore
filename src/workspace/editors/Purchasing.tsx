@@ -1,11 +1,11 @@
 import { useState } from 'react'
-import { suppliers } from '../../data/mockData'
 import type { PurchaseOrder } from '../../data/types'
 import { peso, shortDate } from '../../lib/format'
 import { useAnalytics, useStore } from '../../store/StoreContext'
 import { Empty, Modal, Segmented, StatusPill } from '../ui'
 
-const supplierName = (id: string) => suppliers.find((s) => s.id === id)?.name ?? id
+// Products name their supplier directly (supplierId holds the name).
+const supplierName = (id: string) => id || 'No supplier'
 
 export function PurchasingPanel() {
   const { state, actions } = useStore()

@@ -1,6 +1,11 @@
 node_modules
 dist
 dist-ssr
+dist-electron
 release
+ml_service/.venv
+__pycache__/
+*.pyc
 *.local
+.env
 .DS_Store

@@ -3,34 +3,43 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "main": "main.js",
+  "main": "dist-electron/electron/main.js",
   "scripts": {
     "dev": "vite",
+    "dev:main": "tsc -p tsconfig.electron.json --watch --preserveWatchOutput",
     "build": "tsc -b && vite build",
+    "build:main": "tsc -p tsconfig.electron.json",
+    "typecheck": "tsc -b && tsc -p tsconfig.electron.json --noEmit",
     "lint": "oxlint",
     "preview": "vite preview",
-    "electron:dev": "concurrently -k \"npm run dev\" \"wait-on tcp:5173 && cross-env NODE_ENV=development electron .\"",
-    "electron:build": "npm run build && electron-builder"
-  },
-  "build": {
-    "appId": "com.9010grocery.pos",
-    "productName": "9010 Grocery Store",
-    "files": [
-      "dist/**/*",
-      "main.js"
-    ],
-    "directories": {
-      "output": "release"
-    }
+    "db:init": "npm run build:main && node dist-electron/server/db-init.js",
+    "db:reset": "npm run build:main && node dist-electron/server/db-init.js --reset",
+    "server:dev": "npm run build:main && node --enable-source-maps dist-electron/server/index.js",
+    "ml:install": "node scripts/ml.mjs install",
+    "ml:health": "node scripts/ml.mjs health",
+    "electron:dev": "npm run build:main && concurrently -k -n vite,main,app \"npm run dev\" \"npm run dev:main\" \"wait-on tcp:5173 && cross-env NODE_ENV=development electron .\"",
+    "electron:build": "npm run build && npm run build:main && electron-builder --config electron-builder.json"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
+    "axios": "^1.20.0",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.5",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "mysql2": "^3.24.5",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-router-dom": "^7.18.4",
-    "tailwindcss": "^4.3.3"
+    "tailwindcss": "^4.3.3",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
@@ -38,7 +47,7 @@
     "concurrently": "^10.0.5",
     "cross-env": "^10.1.0",
     "electron": "^44.4.3",
-    "electron-builder": "^26.15.3",
+    "electron-builder": "^26.5.0",
     "oxlint": "^1.81.0",
     "typescript": "~6.0.2",
     "vite": "^8.3.0",

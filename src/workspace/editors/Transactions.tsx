@@ -2,15 +2,15 @@ import { useState } from 'react'
 import type { PaymentMethod, Transaction } from '../../data/types'
 import { netTotal } from '../../lib/ai'
 import { daysBetween, downloadCsv, peso, relativeDay, shortDate, time } from '../../lib/format'
-import { useCurrentUser, useStore } from '../../store/StoreContext'
-import { Empty, Field, Modal, Segmented, StatusPill } from '../ui'
+import { OwnerPinModal } from '../../components/OwnerPinModal'
+import { useStore } from '../../store/StoreContext'
+import { Empty, Field, Segmented, StatusPill } from '../ui'
 import { Receipt } from './PointOfSale'
 
 const PAGE = 12
 
 export function TransactionsPanel() {
   const { state, actions } = useStore()
-  const user = useCurrentUser()
   const [range, setRange] = useState<'Today' | '7 days'>('Today')
   const [method, setMethod] = useState<PaymentMethod | 'All'>('All')
   const [query, setQuery] = useState('')
@@ -24,7 +24,8 @@ export function TransactionsPanel() {
   const selected = state.transactions.find((t) => t.id === state.ui.selectedTxnId) ?? null
   const net = rows.reduce((s, t) => s + netTotal(t), 0)
   const cashierName = (id: string) => state.employees.find((e) => e.id === id)?.name ?? '—'
-  const canVoid = (t: Transaction) => user?.role === 'Owner' && t.status === 'Completed' && daysBetween(t.date, now) === 0
+  // Any terminal can void a same-day sale, but only with the owner's PIN and a reason.
+  const canVoid = (t: Transaction) => t.status === 'Completed' && daysBetween(t.date, now) === 0
 
   return <div className={selected ? 'module-panel split-detail' : 'module-panel'}>
     <div className="split-main">
@@ -54,9 +55,11 @@ export function TransactionsPanel() {
       </div>
       {selected.refunds.length > 0 && <div className="refund-history"><span className="eyebrow">REFUNDS</span>{selected.refunds.map((r) => <div key={r.id}><b>{peso(r.amount)}</b><small>{relativeDay(r.date)} · {r.reason} · {r.restocked ? 'restocked' : 'written off'}</small></div>)}</div>}
     </aside>}
-    {confirmVoid && <Modal title={`Void ${confirmVoid.number}?`} eyebrow="OWNER ACTION" onClose={() => setConfirmVoid(null)} footer={<><button className="outline-button" onClick={() => setConfirmVoid(null)}>KEEP</button><button className="danger-button" onClick={() => { actions.voidTransaction(confirmVoid.id); actions.toast(`${confirmVoid.number} voided; stock returned`); setConfirmVoid(null) }}>VOID SALE</button></>}>
-      <p className="muted-text">This cancels the whole sale of {peso(confirmVoid.total)}, returns all items to stock, and is recorded in the e-journal. Voids are only allowed on the same business day.</p>
-    </Modal>}
+    {confirmVoid && <OwnerPinModal title={`Void ${confirmVoid.number}?`} purpose="void" requireReason confirmLabel="VOID SALE"
+      description={`Cancels the whole sale of ${peso(confirmVoid.total)} and returns all items to stock. Voids are only allowed on the same business day and are recorded in the e-journal.`}
+      onClose={() => setConfirmVoid(null)}
+      perform={(pin, reason) => actions.voidTransaction(confirmVoid.id, pin, reason)}
+      onApproved={({ owner_name }) => { actions.toast(`${confirmVoid.number} voided · approved by ${owner_name}`); setConfirmVoid(null) }} />}
   </div>
 }
 
@@ -71,15 +74,12 @@ const reasons = ['Damaged / defective', 'Expired on purchase', 'Wrong item', 'Ch
 
 export function ReturnsPanel() {
   const { state, actions } = useStore()
-  const user = useCurrentUser()
   const [lookup, setLookup] = useState('')
   const [qty, setQty] = useState<Record<string, number>>({})
   const [reason, setReason] = useState<(typeof reasons)[number]>(reasons[0])
   const [restock, setRestock] = useState(false)
-  const [pin, setPin] = useState('')
+  const [approving, setApproving] = useState(false)
   const txn = state.transactions.find((t) => t.id === state.ui.returnTxnId) ?? null
-  const owner = state.employees.find((e) => e.role === 'Owner')
-  const needsApproval = user?.role !== 'Owner'
   const now = new Date()
 
   function find() {
@@ -95,13 +95,13 @@ export function ReturnsPanel() {
   const amount = txn ? txn.lines.reduce((s, l) => s + (qty[l.productId] ?? 0) * l.price * ratio, 0) : 0
   const count = Object.values(qty).reduce((a, b) => a + b, 0)
   const age = txn ? daysBetween(txn.date, now) : 0
-  const approved = !needsApproval || pin === owner?.pin
 
-  function submit() {
-    if (!txn || !count || !approved) return
-    actions.refund(txn.id, Object.entries(qty).map(([productId, q]) => ({ productId, qty: q })), reason, restock)
-    actions.toast(`Refunded ${peso(amount)} on ${txn.number}`)
-    setQty({}); setPin('')
+  // Every refund needs the owner's PIN (high-risk action). The refund is sent with the PIN; this runs once both are accepted.
+  function submitted(ownerName: string) {
+    if (!txn) return
+    actions.toast(`Refunded ${peso(amount)} on ${txn.number} · approved by ${ownerName}`)
+    setQty({})
+    setApproving(false)
   }
 
   const recent = state.transactions.flatMap((t) => t.refunds.map((r) => ({ ...r, number: t.number }))).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6)
@@ -112,7 +112,7 @@ export function ReturnsPanel() {
     {!txn && <Empty>Search a receipt, or pick one in the Transactions panel and press “Return / Refund”.</Empty>}
     {txn && <div className="return-form">
       <div className="return-head"><div><b>{txn.number}</b><small>{shortDate(txn.date)} {time(txn.date)} · {txn.payment.method} · {peso(txn.total)}</small></div><StatusPill value={txn.status} /></div>
-      {age > 7 && <div className="advisory-banner"><span>!</span><p><b>Outside the 7-day return window</b><small>This sale is {age} days old. Owner approval is required.</small></p></div>}
+      {age > 7 && <div className="advisory-banner"><span>!</span><p><b>Outside the 7-day return window</b><small>This sale is {age} days old. Check with the owner before refunding.</small></p></div>}
       {txn.status === 'Voided' ? <Empty>This sale was voided and cannot be refunded.</Empty> : <>
         <table className="data-table"><thead><tr><th>ITEM</th><th>SOLD</th><th>RETURNED</th><th>RETURN NOW</th><th>REFUND</th></tr></thead><tbody>
           {txn.lines.map((line) => {
@@ -126,11 +126,15 @@ export function ReturnsPanel() {
         <div className="form-grid">
           <Field label="REASON"><select value={reason} onChange={(e) => { const r = e.target.value as (typeof reasons)[number]; setReason(r); setRestock(r === 'Wrong item' || r === 'Changed mind' || r === 'Overcharged') }}>{reasons.map((r) => <option key={r}>{r}</option>)}</select></Field>
           <Field label="ITEM CONDITION"><label className="toggle"><input type="checkbox" checked={restock} onChange={(e) => setRestock(e.target.checked)} /><span>{restock ? 'Return to shelf (restock)' : 'Write off to waste log'}</span></label></Field>
-          {(needsApproval || age > 7) && <Field label="OWNER PIN" hint="Demo owner PIN: 1234"><input type="password" inputMode="numeric" maxLength={4} value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} /></Field>}
         </div>
-        <div className="form-actions"><span>{count} ITEM{count === 1 ? '' : 'S'} · REFUND VIA {txn.payment.method.toUpperCase()}</span><button className="primary-button" disabled={!count || !(approved && (age <= 7 || pin === owner?.pin))} onClick={submit}>REFUND {peso(amount)}</button></div>
+        <div className="form-actions"><span>{count} ITEM{count === 1 ? '' : 'S'} · REFUND VIA {txn.payment.method.toUpperCase()}</span><button className="primary-button" disabled={!count} onClick={() => setApproving(true)}>REFUND {peso(amount)}</button></div>
       </>}
     </div>}
+    {approving && txn && <OwnerPinModal title={`Refund ${peso(amount)}?`} purpose="refund" confirmLabel="APPROVE REFUND"
+      description={`${count} item${count === 1 ? '' : 's'} from ${txn.number} · ${reason} · ${restock ? 'returned to shelf' : 'written off'}. Refunds need the owner's PIN.`}
+      onClose={() => setApproving(false)}
+      perform={(pin) => actions.refund(txn.id, Object.entries(qty).map(([productId, q]) => ({ productId, qty: q })), reason, restock, pin)}
+      onApproved={({ owner_name }) => submitted(owner_name)} />}
     <div className="subsection"><span className="eyebrow">RECENT REFUNDS</span>
       {recent.map((r) => <div className="list-row" key={r.id}><div><b>{r.number}</b><small>{relativeDay(r.date)} · {r.reason}</small></div><span>{r.restocked ? 'Restocked' : 'Written off'}</span><strong>{peso(r.amount)}</strong></div>)}
     </div>

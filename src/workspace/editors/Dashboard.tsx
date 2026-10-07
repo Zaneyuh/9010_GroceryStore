@@ -1,7 +1,7 @@
 import { iconRegistry } from '../../icons/iconRegistry'
 import { hourlySales, netTotal } from '../../lib/ai'
 import { DAY_MS, daysBetween, num, pct, peso } from '../../lib/format'
-import { useAnalytics, useCurrentUser, useStore } from '../../store/StoreContext'
+import { allowedWorkspaces, useAnalytics, useCurrentUser, useStore } from '../../store/StoreContext'
 import type { WorkspaceName } from '../../data/types'
 import { BarList, ComboChart, Legend, Metric, SERIES, SectionHeading } from '../ui'
 import { InsightCard } from './Insights'
@@ -33,7 +33,7 @@ export function DashboardPanel() {
   const top = [...topToday].sort((a, b) => b[1] - a[1]).slice(0, 5)
   const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
   const attention = [...urgent, ...expiring.filter((e) => !urgent.includes(e))].slice(0, 4)
-  const allowed = state.settings.rolePermissions[user?.role ?? 'Owner']
+  const allowed = allowedWorkspaces(state.settings, user?.role ?? 'Owner')
   const shortcuts = (['Point of Sale', 'Inventory', 'AI Insights', 'Waste', 'Reports', 'Settings'] as WorkspaceName[]).filter((w) => allowed.includes(w))
   const shortcutText: Partial<Record<WorkspaceName, string>> = { 'Point of Sale': 'Start a transaction', Inventory: 'Manage stock and reorders', 'AI Insights': 'Forecasts, trends & basket analysis', Waste: 'Track losses', Reports: 'X/Z readings, VAT & BIR', Settings: 'Store preferences' }
 

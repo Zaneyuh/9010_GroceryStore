@@ -1,6 +1,8 @@
 export const iconRegistry: { brandMark: string; editors: Record<string, string>; shortcuts: Record<string, string> } = {
   brandMark: '9',
   editors: {
+    'Admin Station': '⇄',
+    'Data Import': '⇪',
     Dashboard: '▦',
     'Product Grid': '▤',
     Cart: '▣',

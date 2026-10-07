@@ -4,7 +4,7 @@
  * rules) computed in the browser from the mock dataset, so it can be swapped
  * for a backend model service later without changing the screens.
  */
-import { DETAIL_DAYS, HISTORY_DAYS } from '../data/mockData'
+import { DETAIL_DAYS, HISTORY_DAYS } from '../data/defaults'
 import type { CustomerRequest, ForecastMethod, Product, PurchaseOrder, Settings, Transaction, WasteEntry, WorkspaceName } from '../data/types'
 import { DAY_MS, daysBetween, peso, pct, startOfDay } from './format'
 

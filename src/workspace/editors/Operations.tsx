@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { CustomerRequest, Employee, RequestStatus, Role, WasteReason } from '../../data/types'
 import { netTotal, requestDemand } from '../../lib/ai'
 import { daysBetween, initials, peso, relativeDay, time } from '../../lib/format'
-import { useAnalytics, useCurrentUser, useStore } from '../../store/StoreContext'
+import { allowedWorkspaces, useAnalytics, useCurrentUser, useStore } from '../../store/StoreContext'
 import { BarList, Empty, Field, Metric, Modal, SERIES, Segmented, SectionHeading, StatusPill } from '../ui'
 
 // ---------- Waste ----------
@@ -93,7 +93,7 @@ export function RequestsPanel() {
 
 // ---------- Employees ----------
 
-const roles: Role[] = ['Owner', 'Cashier', 'Inventory Clerk']
+const roles: Role[] = ['Owner', 'Cashier']
 
 export function EmployeesPanel() {
   const { state, actions } = useStore()
@@ -102,8 +102,8 @@ export function EmployeesPanel() {
   const salesBy = (id: string) => state.transactions.filter((t) => t.cashierId === id && daysBetween(t.date, now) < 7)
 
   return <div className="module-panel">
-    <div className="module-intro"><div><span className="eyebrow">PEOPLE &amp; ACCESS</span><h2>Team members</h2><p>Each person signs in with a 4-digit PIN. Their role decides which workspaces they see.</p></div>
-      <button className="primary-button" onClick={() => setEditing({ id: `e${Date.now().toString(36)}`, name: '', email: '', role: 'Cashier', pin: '', status: 'Active', lastActive: new Date().toISOString() })}>＋ ADD EMPLOYEE</button></div>
+    <div className="module-intro"><div><span className="eyebrow">PEOPLE &amp; ACCESS</span><h2>Team members</h2><p>Cashiers have no PIN or password: the owner assigns them to a terminal from the Admin Station. Their role decides which workspaces they see.</p></div>
+      <button className="primary-button" onClick={() => setEditing({ id: `e${Date.now().toString(36)}`, name: '', email: '', role: 'Cashier', status: 'Active', lastActive: new Date().toISOString() })}>＋ ADD EMPLOYEE</button></div>
     <div className="data-table-wrap"><table className="data-table clickable"><thead><tr>{['EMPLOYEE', 'ROLE', 'STATUS', 'SALES (7 DAYS)', 'RECEIPTS', 'LAST ACTIVE'].map((h) => <th key={h}>{h}</th>)}</tr></thead>
       <tbody>{state.employees.map((e) => { const sales = salesBy(e.id); return <tr key={e.id} onClick={() => setEditing(e)}>
         <td><div className="person-cell"><span className="avatar">{initials(e.name)}</span><div><b>{e.name}</b><small>{e.email}</small></div></div></td>
@@ -115,17 +115,15 @@ export function EmployeesPanel() {
 function EmployeeModal({ employee, isNew, onClose, onSave }: { employee: Employee; isNew: boolean; onClose: () => void; onSave: (e: Employee) => void }) {
   const { state } = useStore()
   const [draft, setDraft] = useState(employee)
-  const pinTaken = state.employees.some((e) => e.id !== draft.id && e.pin === draft.pin)
-  const valid = draft.name.trim() && /^\d{4}$/.test(draft.pin) && !pinTaken
+  const valid = Boolean(draft.name.trim())
   return <Modal title={isNew ? 'Add employee' : draft.name} eyebrow="TEAM MEMBER" onClose={onClose} footer={<><button className="outline-button" onClick={onClose}>CANCEL</button><button className="primary-button" disabled={!valid} onClick={() => onSave(draft)}>SAVE</button></>}>
     <div className="form-grid">
       <Field label="FULL NAME"><input autoFocus value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></Field>
       <Field label="EMAIL"><input type="email" value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} /></Field>
       <Field label="ROLE"><select value={draft.role} onChange={(e) => setDraft({ ...draft, role: e.target.value as Role })}>{roles.map((r) => <option key={r}>{r}</option>)}</select></Field>
       <Field label="STATUS"><select value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value as Employee['status'] })}>{['Active', 'On leave', 'Inactive'].map((s) => <option key={s}>{s}</option>)}</select></Field>
-      <Field label="SIGN-IN PIN" hint={pinTaken ? 'PIN already used by another employee' : '4 digits'}><input inputMode="numeric" maxLength={4} value={draft.pin} onChange={(e) => setDraft({ ...draft, pin: e.target.value.replace(/\D/g, '') })} /></Field>
     </div>
-    <p className="muted-text">Can open: {state.settings.rolePermissions[draft.role].join(', ')}</p>
+    <p className="muted-text">Can open: {allowedWorkspaces(state.settings, draft.role).join(', ')}</p>
   </Modal>
 }
 

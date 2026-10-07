@@ -1,64 +1,44 @@
-# 9010 Grocery Store — POS
+# 9010 Grocery Store
 
-Electron + React + TypeScript + Vite + Tailwind CSS.
+An offline point-of-sale and store management system for a small grocery. One **server PC** holds the
+database; **cashier PCs** connect to it over the store network. Includes sales, inventory, waste, customer
+requests, reports, AI demand forecasting, and importing data from an old system.
 
-## Setup
-```
-npm install
-```
+Built with Electron, React, TypeScript, Node.js/Express, MySQL and a Python ML service.
 
-## Run in dev (browser only, fastest feedback loop)
-```
-npm run dev
-```
-Opens at http://localhost:5173
+> Not a PHP project: don't put it in XAMPP's `htdocs`. From XAMPP you only need **MySQL**.
 
-## Run in dev (inside the Electron window)
-```
-npm run electron:dev
-```
-This starts the Vite dev server and opens the Electron window pointed at it, with hot reload.
+## Start the app
 
-## Build a production desktop app
-```
-npm run electron:build
-```
-Outputs installers to /release.
+You need **Node.js 20+** and **MySQL** (XAMPP is fine). Python 3.11/3.12 is only needed for the AI features.
 
-## Signing in (demo)
-The app opens on a PIN sign-in screen. Demo PINs: **Owner 1234 · Cashier 1111 · Inventory clerk 2222**.
-Each role only sees the workspaces allowed in *Settings → Access & roles*.
+1. **Start MySQL** (XAMPP Control Panel → MySQL → Start).
+2. **Create `.env`**: copy `.env.example` to `.env` and set `DB_PASSWORD`.
+3. **Create the database user**: put the same password in `database/create-db-user.sql`, then run
+   ```
+   C:\xampp\mysql\bin\mysql.exe -u root < database/create-db-user.sql
+   ```
+4. **Install and run**:
+   ```
+   npm install
+   npm run db:init
+   npm run electron:dev
+   ```
 
-## Screens (workspaces)
-| Workspace | Panels |
+## First sign-in
+
+Choose **I am the owner** and sign in with username **`admin`** and PIN **`000000`**. You'll be taken to
+**Settings → My account** to set your own name, username and PIN; after that, only your new details work.
+
+Cashiers don't sign in: the owner assigns them to a register from **Admin Station**.
+
+## Useful commands
+
+| Command | What it does |
 |---|---|
-| Dashboard | Live KPIs, sales by hour vs 6-day average, top sellers, AI insights, needs-attention list |
-| Point of Sale | Product grid (search / SKU / barcode + Enter), cart with Senior/PWD VAT-exempt discount, hold/resume, Cash/GCash/Card/Maya payment, printable official receipt, AI "frequently bought with" upsell |
-| Transactions | Sales journal with receipt detail, reprint, void (owner, same day), returns & refunds (owner PIN for cashiers), shift & cash drawer |
-| Inventory | Stock metrics, sortable/filterable table, add/edit product, stock adjustments, AI reorder level & days of cover |
-| Purchasing | AI-suggested purchase orders (editable quantities), purchase order lifecycle Draft → Sent → Received |
-| AI Insights | Demand forecast chart (WMA / SES / Holt with 80% interval), model backtest & tuning, category trends, rising/falling movers, traffic heatmap, insight feed and "Ask AI" |
-| Reports | X/Z reading, e-Journal, VAT summary, sales by item, inventory valuation, waste, cashier performance (CSV export + print); market-basket analysis and ABC classes |
-| Waste | Waste log, loss by reason, AI expiry-risk with one-click markdowns |
-| Requests | Customer item requests with automatic grouping into demand signals |
-| Employees | Team, roles & PINs, 7-day sales per employee, cash drawer |
-| Settings | Business profile, tax & receipts, payment methods, inventory & AI parameters, notifications, role permissions, reset demo data |
+| `npm run electron:dev` | Run the desktop app (starts the server too) |
+| `npm run db:reset` | Wipe the database and start over with `admin` / `000000` |
+| `npm run ml:install` | Install the Python packages for AI forecasting |
 
-Every panel can be split, swapped or changed via the editor menu in its header (Blender-style areas).
-
-## Data & AI
-This is a front-end prototype: there is no backend yet. `src/data/mockData.ts` generates a deterministic dataset
-(30 products, 12 weeks of daily sales, the last 7 days as itemised receipts) anchored to today's date, and changes are kept in
-`localStorage`. `src/lib/ai.ts` contains the analytics — weighted moving average, simple exponential smoothing, Holt's linear trend,
-backtest error (MAE/MAPE), safety stock & reorder quantities, expiry risk, association rules (basket analysis), ABC classes,
-anomaly detection and the insight/assistant text. These functions are the seam to replace with API calls later.
-
-## Project structure
-- `src/components/Login.tsx` — PIN sign-in
-- `src/components/Workspace.tsx` — workspace tabs and the split-panel layout engine
-- `src/workspace/editors/` — every screen/panel; `index.tsx` registers them for the editor menu
-- `src/workspace/ui.tsx` — shared UI: modal, fields, segmented control, charts (SVG with hover tooltips)
-- `src/store/StoreContext.tsx` — app state, actions (checkout, refunds, POs, waste…) and memoised analytics
-- `src/data/` — types and mock data; `src/lib/` — formatting, POS math, AI/analytics
-- `src/components/CashierMainMenu.tsx` etc. — the earlier light-theme screens, still routable (`#/cashier`)
-- `main.js` — Electron's entry point (creates the app window)
+**Something not working?** See the full guide: [docs/GUIDE.md](docs/GUIDE.md) (setup details, cashier
+registers, importing data, troubleshooting, project structure).

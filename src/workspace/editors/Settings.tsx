@@ -1,15 +1,19 @@
 import { useState } from 'react'
-import { allWorkspaces } from '../../data/mockData'
+import { allWorkspaces, OWNER_ONLY_WORKSPACES } from '../../data/defaults'
 import type { ForecastMethod, PaymentMethod, Role, Settings } from '../../data/types'
 import { useCurrentUser, useStore, type SettingsSection } from '../../store/StoreContext'
-import { Field, Modal, Segmented } from '../ui'
+import { useAuth } from '../../context/AuthContext'
+import { Field, Segmented } from '../ui'
+import { MyAccount } from './MyAccount'
 
-const sections: SettingsSection[] = ['Business profile', 'Tax & receipts', 'Payment methods', 'Inventory & AI', 'Notifications', 'Access & roles', 'Data']
+const sections: SettingsSection[] = ['My account', 'Business profile', 'Tax & receipts', 'Payment methods', 'Inventory & AI', 'Notifications', 'Access & roles', 'Data']
 
 export function SettingsNav() {
   const { state, actions } = useStore()
+  // First sign-in as the default admin: My account has to be done before anything else.
+  const setupPending = Boolean(useAuth().user?.must_change_credentials)
   return <div className="settings-nav"><span className="eyebrow">CONFIGURATION</span><h2>Store settings</h2>
-    {sections.map((section) => <button className={state.ui.settingsSection === section ? 'selected' : ''} key={section} onClick={() => actions.setUi({ settingsSection: section })}>{section}<span>›</span></button>)}
+    {sections.map((section) => <button className={(setupPending ? section === 'My account' : state.ui.settingsSection === section) ? 'selected' : ''} key={section} disabled={setupPending && section !== 'My account'} title={setupPending && section !== 'My account' ? 'Set up your account first' : undefined} onClick={() => actions.setUi({ settingsSection: section })}>{section}<span>›</span></button>)}
   </div>
 }
 
@@ -17,8 +21,8 @@ export function SettingsPanel() {
   const { state, actions } = useStore()
   const user = useCurrentUser()
   const [draft, setDraft] = useState<Settings>(state.settings)
-  const [confirmReset, setConfirmReset] = useState(false)
-  const section = state.ui.settingsSection
+  const setupPending = Boolean(useAuth().user?.must_change_credentials)
+  const section = setupPending ? 'My account' : state.ui.settingsSection
   const dirty = JSON.stringify(draft) !== JSON.stringify(state.settings)
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => setDraft((d) => ({ ...d, [key]: value }))
   const readOnly = user?.role !== 'Owner'
@@ -27,6 +31,7 @@ export function SettingsPanel() {
 
   return <div className="settings-form">
     <span className="eyebrow">{section.toUpperCase()}</span>
+    {section === 'My account' && <MyAccount />}
     {section === 'Business profile' && <>
       <h2>Store information</h2><p>These details appear on receipts and generated reports.</p>
       <Field label="REGISTERED BUSINESS NAME"><input value={draft.businessName} onChange={(e) => set('businessName', e.target.value)} /></Field>
@@ -64,16 +69,18 @@ export function SettingsPanel() {
       <div className="toggle-list">{([['lowStock', 'Low-stock & stock-out predictions'], ['expiry', 'Near-expiry stock'], ['requests', 'New customer requests'], ['aiDigest', 'Daily AI digest at opening'], ['shiftReminder', 'Cash count reminders']] as [keyof Settings['notifications'], string][]).map(([key, label]) => <label className="toggle-row" key={key}><div><b>{label}</b></div><input type="checkbox" checked={draft.notifications[key]} onChange={(e) => set('notifications', { ...draft.notifications, [key]: e.target.checked })} /></label>)}</div>
     </>}
     {section === 'Access & roles' && <>
-      <h2>Access &amp; roles</h2><p>Which workspaces each role can open. Owners always have full access.</p>
-      <div className="data-table-wrap"><table className="data-table permission-table"><thead><tr><th>WORKSPACE</th>{(['Owner', 'Cashier', 'Inventory Clerk'] as Role[]).map((r) => <th key={r}>{r.toUpperCase()}</th>)}</tr></thead><tbody>
-        {allWorkspaces.map((w) => <tr key={w}><td><b>{w}</b></td>{(['Owner', 'Cashier', 'Inventory Clerk'] as Role[]).map((r) => <td key={r}><input type="checkbox" aria-label={`${r} can open ${w}`} disabled={r === 'Owner' || w === 'Dashboard'} checked={draft.rolePermissions[r].includes(w)} onChange={(e) => set('rolePermissions', { ...draft.rolePermissions, [r]: e.target.checked ? allWorkspaces.filter((x) => x === w || draft.rolePermissions[r].includes(x)) : draft.rolePermissions[r].filter((x) => x !== w) })} /></td>)}</tr>)}
+      <h2>Access &amp; roles</h2><p>Which workspaces each role can open. The owner always has full access; Admin Station (which includes Employees) and Settings are owner-only.</p>
+      <div className="data-table-wrap"><table className="data-table permission-table"><thead><tr><th>WORKSPACE</th>{(['Owner', 'Cashier'] as Role[]).map((r) => <th key={r}>{r.toUpperCase()}</th>)}</tr></thead><tbody>
+        {allWorkspaces.map((w) => <tr key={w}><td><b>{w}</b></td>{(['Owner', 'Cashier'] as Role[]).map((r) => r !== 'Owner' && OWNER_ONLY_WORKSPACES.includes(w) ? <td key={r} title="Owner only">—</td> : <td key={r}><input type="checkbox" aria-label={`${r} can open ${w}`} disabled={r === 'Owner'} checked={draft.rolePermissions[r].includes(w)} onChange={(e) => set('rolePermissions', { ...draft.rolePermissions, [r]: e.target.checked ? allWorkspaces.filter((x) => x === w || draft.rolePermissions[r].includes(x)) : draft.rolePermissions[r].filter((x) => x !== w) })} /></td>)}</tr>)}
       </tbody></table></div>
     </>}
-    {section === 'Data' && <>
-      <h2>Demo data</h2><p>This prototype runs on a generated dataset stored in your browser. Resetting restores the original products, 12 weeks of sales history and receipts.</p>
-      <button className="danger-button" disabled={readOnly} onClick={() => setConfirmReset(true)}>RESET DEMO DATA</button>
+    {section === 'Data' && state.source === 'live' && <>
+      <h2>Store data</h2><p>Products, stock, sales, refunds, waste, customer requests and employees are read from and saved to the store database on the server PC. To bring in records from the old system, open the Data Import panel in Admin Station.</p>
+      <button className="outline-button" onClick={() => actions.navigate('Admin Station')}>OPEN ADMIN STATION →</button>
     </>}
-    {section !== 'Data' && <div className="form-actions"><span>{readOnly ? 'VIEW ONLY · OWNER ACCESS REQUIRED' : dirty ? 'UNSAVED CHANGES' : 'ALL CHANGES SAVED'}</span><div>{dirty && <button className="outline-button" onClick={() => setDraft(state.settings)}>DISCARD</button>}<button className="primary-button" disabled={!dirty || readOnly} onClick={save}>SAVE CHANGES</button></div></div>}
-    {confirmReset && <Modal title="Reset demo data?" eyebrow="DATA" onClose={() => setConfirmReset(false)} footer={<><button className="outline-button" onClick={() => setConfirmReset(false)}>CANCEL</button><button className="danger-button" onClick={() => { actions.resetDemo(); setConfirmReset(false); actions.toast('Demo data reset', 'info') }}>RESET</button></>}><p className="muted-text">All sales, stock changes, waste entries and purchase orders made in this browser will be replaced. Employees and settings are kept.</p></Modal>}
+    {section === 'Data' && state.source === 'demo' && <>
+      <h2>Not connected</h2><p>This PC hasn't reached the store server yet, so there is no data to show. Start the app on the server PC (or check the network); the screens fill in as soon as it connects.</p>
+    </>}
+    {section !== 'Data' && section !== 'My account' && <div className="form-actions"><span>{readOnly ? 'VIEW ONLY · OWNER ACCESS REQUIRED' : dirty ? 'UNSAVED CHANGES' : 'ALL CHANGES SAVED'}</span><div>{dirty && <button className="outline-button" onClick={() => setDraft(state.settings)}>DISCARD</button>}<button className="primary-button" disabled={!dirty || readOnly} onClick={save}>SAVE CHANGES</button></div></div>}
   </div>
 }

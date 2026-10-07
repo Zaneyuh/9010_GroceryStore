@@ -4,9 +4,12 @@ import { Navigate, useNavigate } from 'react-router-dom'
 import type { WorkspaceName } from '../data/types'
 import { iconRegistry } from '../icons/iconRegistry'
 import { initials, time } from '../lib/format'
-import { useAnalytics, useCurrentUser, useStore } from '../store/StoreContext'
-import { editorGroups, editors, type Editor } from '../workspace/editors'
+import { useAuth } from '../context/AuthContext'
+import { useTerminal } from '../context/TerminalContext'
+import { allowedWorkspaces, useAnalytics, useCurrentUser, useStore } from '../store/StoreContext'
+import { editorGroups, editors, editorWorkspaces, type Editor } from '../workspace/editors'
 import { Toasts } from '../workspace/ui'
+import { useHorizontalScroll } from '../hooks/useHorizontalScroll'
 
 type Direction = 'horizontal' | 'vertical'
 type LayoutNode =
@@ -20,6 +23,7 @@ const makeSplit = (direction: Direction, first: LayoutNode, second: LayoutNode, 
 
 function defaultLayout(workspace: WorkspaceName): LayoutNode {
   switch (workspace) {
+    case 'Admin Station': return makeSplit('horizontal', makePanel('Admin Station'), makePanel('Employees'), 0.6)
     case 'Point of Sale': return makeSplit('horizontal', makePanel('Product Grid'), makePanel('Cart'), 0.64)
     case 'Transactions': return makeSplit('horizontal', makePanel('Transactions'), makeSplit('vertical', makePanel('Returns & Refunds'), makePanel('Shift & Cash Drawer'), 0.6), 0.6)
     case 'Inventory': return makeSplit('horizontal', makeSplit('vertical', makePanel('Inventory Metrics'), makePanel('Purchasing'), 0.3), makePanel('Inventory Table'), 0.45)
@@ -28,17 +32,9 @@ function defaultLayout(workspace: WorkspaceName): LayoutNode {
     case 'Reports': return makeSplit('horizontal', makePanel('Reports'), makePanel('Basket Analysis'), 0.55)
     case 'Waste': return makePanel('Waste Log')
     case 'Requests': return makePanel('Customer Requests')
-    case 'Employees': return makeSplit('horizontal', makePanel('Employees'), makePanel('Shift & Cash Drawer'), 0.6)
     case 'Settings': return makeSplit('horizontal', makePanel('Settings Navigation'), makePanel('Business Settings'), 0.3)
     default: return makePanel('Dashboard')
   }
-}
-
-function splitEditorFor(workspace: WorkspaceName): Editor {
-  if (workspace === 'Point of Sale') return 'Cart'
-  if (workspace === 'AI Insights') return 'Model Explanation'
-  if (workspace === 'Transactions') return 'Returns & Refunds'
-  return 'AI Insights'
 }
 
 function updateNode(node: LayoutNode, id: string, update: (node: LayoutNode) => LayoutNode): LayoutNode {
@@ -202,20 +198,40 @@ function resolveSplitDirection(dx: number, dy: number, previous?: Direction): Di
 function Workspace() {
   const { state } = useStore()
   const user = useCurrentUser()
-  const allowed = user ? state.settings.rolePermissions[user.role] : []
-  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceName>('Dashboard')
+  const auth = useAuth()
+  // First sign-in as the default admin: only Settings (→ My account) until the owner has set up their account.
+  const setupPending = Boolean(auth.user?.must_change_credentials)
+  const allowed = user ? (setupPending ? ['Settings' as WorkspaceName] : allowedWorkspaces(state.settings, user.role)) : []
+  // The owner starts on the Admin Station; a cashier starts on the first workspace they may open (Point of Sale).
+  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceName>(() => allowed[0] ?? 'Point of Sale')
+  const terminal = useTerminal()
   // Each workspace keeps its own arrangement while you switch tabs.
   const [layouts, setLayouts] = useState<Partial<Record<WorkspaceName, LayoutNode>>>({})
-  const layout = layouts[activeWorkspace] ?? defaultLayout(activeWorkspace)
+  // Built once per workspace: defaultLayout() makes fresh panel ids, and a split drag needs them to stay the same across renders.
+  const defaultLayouts = useRef<Partial<Record<WorkspaceName, LayoutNode>>>({})
+  const initialLayout = (workspace: WorkspaceName) => defaultLayouts.current[workspace] ??= defaultLayout(workspace)
+  const layout = layouts[activeWorkspace] ?? initialLayout(activeWorkspace)
   const setLayout = (next: LayoutNode | ((current: LayoutNode) => LayoutNode)) => setLayouts((all) => {
-    const current = all[activeWorkspace] ?? defaultLayout(activeWorkspace)
+    const current = all[activeWorkspace] ?? initialLayout(activeWorkspace)
     return { ...all, [activeWorkspace]: typeof next === 'function' ? next(current) : next }
   })
   const [dragging, setDragging] = useState(false)
   const [splitDrag, setSplitDrag] = useState<SplitDrag | null>(null)
   const allowedRef = useRef(allowed)
+  const tabStrip = useHorizontalScroll<HTMLDivElement>()
+
+  // Keep the selected tab visible when it changes (including from shortcuts elsewhere in the app).
+  useEffect(() => {
+    tabStrip.element.current?.querySelector<HTMLElement>('.workspace-tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' })
+  }, [activeWorkspace, tabStrip.element])
 
   useEffect(() => { allowedRef.current = allowed })
+
+  // If role settings change while open, never leave the user on a workspace they can no longer open.
+  const allowedKey = allowed.join('|')
+  useEffect(() => {
+    if (allowed.length && !allowed.includes(activeWorkspace)) setActiveWorkspace(allowed[0])
+  }, [allowedKey, activeWorkspace])
 
   function selectWorkspace(workspace: WorkspaceName) {
     setActiveWorkspace(workspace)
@@ -348,19 +364,23 @@ function Workspace() {
           <div className="brand-mark" aria-hidden="true"><span>{iconRegistry.brandMark}</span></div>
           <div><strong>9010</strong><span>GROCERY SYSTEM</span></div>
         </div>
-        <div className="workspace-tab-list">
-          <span className="tab-caption">WORKSPACES</span>
-          {allowed.map((workspace) => (
-            <button key={workspace} className={activeWorkspace === workspace ? 'workspace-tab active' : 'workspace-tab'} onClick={() => selectWorkspace(workspace)}>
-              {workspace}
-            </button>
-          ))}
+        <span className="tab-caption">WORKSPACES</span>
+        <div className={`workspace-tab-strip${tabStrip.overflow.left ? ' more-left' : ''}${tabStrip.overflow.right ? ' more-right' : ''}`}>
+          {tabStrip.overflow.left && <button className="tab-scroll left" aria-label="Scroll workspaces left" onClick={() => tabStrip.scrollBy(-1)}>‹</button>}
+          <div className="workspace-tab-list" ref={tabStrip.attach}>
+            {allowed.map((workspace) => (
+              <button key={workspace} className={activeWorkspace === workspace ? 'workspace-tab active' : 'workspace-tab'} onClick={() => selectWorkspace(workspace)}>
+                {workspace}
+              </button>
+            ))}
+          </div>
+          {tabStrip.overflow.right && <button className="tab-scroll right" aria-label="Scroll workspaces right" onClick={() => tabStrip.scrollBy(1)}>›</button>}
         </div>
         <AccountMenu />
       </nav>
 
       <div className="workspace-titlebar">
-        <div><span className="crumb">WORKSPACE</span><b>{activeWorkspace.toUpperCase()}</b><span className="crumb-separator">/</span><span className="title-detail">{workspaceDescription(activeWorkspace)}</span></div>
+        <div><span className="crumb">WORKSPACE</span><b>{activeWorkspace.toUpperCase()}</b><span className="crumb-separator">/</span><span className="title-detail">{workspaceDescription(activeWorkspace)}</span>{user.role === 'Cashier' && <span className="cashier-chip">Cashier: <b>{user.name}</b>{terminal.terminalId && <> · {terminal.terminalId}</>}{!terminal.online && <em> · reconnecting…</em>}</span>}</div>
         <div className="title-actions"><span className="sync-status"><i /> SAVED LOCALLY</span><button className="quiet-button" onClick={() => setLayout(defaultLayout(activeWorkspace))}>Reset layout</button></div>
       </div>
 
@@ -389,6 +409,7 @@ function Workspace() {
 function AccountMenu() {
   const { state, actions } = useStore()
   const user = useCurrentUser()
+  const auth = useAuth()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -403,7 +424,7 @@ function AccountMenu() {
   }, [open])
 
   if (!user) return null
-  const canSettings = state.settings.rolePermissions[user.role].includes('Settings')
+  const canSettings = allowedWorkspaces(state.settings, user.role).includes('Settings')
   const shiftOpen = !state.shift.closedAt
 
   return <div className="account-menu-wrap" ref={menuRef}>
@@ -411,18 +432,19 @@ function AccountMenu() {
       <span className="account-clock">{shiftOpen ? 'SHIFT OPEN' : 'SHIFT CLOSED'} <b>{time(state.shift.openedAt)}</b></span><span className="avatar">{initials(user.name)}</span><span className="account-person">{user.name.split(' ')[0]} {user.name.split(' ')[1]?.[0] ?? ''}.<small>{user.role.toUpperCase()}</small></span><span className="account-caret">⌄</span>
     </button>
     {open && <div className="account-dropdown" role="menu" aria-label="Account menu">
-      <div className="account-menu-profile"><span className="avatar">{initials(user.name)}</span><div><b>{user.name}</b><small>{user.role.toUpperCase()} · {user.role === 'Owner' ? 'FULL ACCESS' : `${state.settings.rolePermissions[user.role].length} WORKSPACES`}</small></div></div>
+      <div className="account-menu-profile"><span className="avatar">{initials(user.name)}</span><div><b>{user.name}</b><small>{user.role.toUpperCase()} · {user.role === 'Owner' ? 'FULL ACCESS' : `${allowedWorkspaces(state.settings, user.role).length} WORKSPACES`}</small></div></div>
       {canSettings && <button role="menuitem" onClick={() => { actions.navigate('Settings'); setOpen(false) }}><span>⚙</span> Store settings</button>}
-      <button role="menuitem" onClick={() => { window.location.hash = '/cashier'; setOpen(false) }}><span>▦</span> Classic cashier menu</button>
-      <button role="menuitem" onClick={() => { actions.logout(); navigate('/') }}><span>⎋</span> Switch user / sign out</button>
+      {user.role === 'Owner'
+        ? <button role="menuitem" onClick={() => { setOpen(false); void auth.logout().then(() => navigate('/')) }}><span>⎋</span> Sign out</button>
+        : <p className="account-menu-note">Your shift is ended by the owner from the Admin Station.</p>}
     </div>}
   </div>
 }
 
 function workspaceDescription(workspace: WorkspaceName) {
   const descriptions: Record<WorkspaceName, string> = {
-    Dashboard: 'Store overview', 'Point of Sale': 'Checkout terminal', Transactions: 'Receipts, returns & cash drawer', Inventory: 'Stock control', Purchasing: 'AI replenishment & suppliers',
-    'AI Insights': 'Forecasts, trends & recommendations', Reports: 'BIR readings, tax & operations', Waste: 'Loss tracking', Requests: 'Customer demand', Employees: 'Team access & shifts', Settings: 'Store configuration',
+    'Admin Station': 'Terminals, cashiers & team', Dashboard: 'Store overview', 'Point of Sale': 'Checkout terminal', Transactions: 'Receipts, returns & cash drawer', Inventory: 'Stock control', Purchasing: 'AI replenishment & suppliers',
+    'AI Insights': 'Forecasts, trends & recommendations', Reports: 'BIR readings, tax & operations', Waste: 'Loss tracking', Requests: 'Customer demand', Settings: 'Store configuration',
   }
   return descriptions[workspace]
 }
@@ -537,6 +559,14 @@ function AreaPanel({ node, onEditorChange, onSplitDrag }: {
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null)
+  const { state } = useStore()
+  const user = useCurrentUser()
+  // A panel can only be switched to editors from workspaces this role may open (cashiers never see owner screens).
+  const setupPending = Boolean(useAuth().user?.must_change_credentials)
+  const allowed = user ? (setupPending ? ['Settings' as WorkspaceName] : allowedWorkspaces(state.settings, user.role)) : []
+  const visibleGroups = editorGroups
+    .map((group) => ({ ...group, items: group.items.filter((editor) => editorWorkspaces[editor].some((w) => allowed.includes(w))) }))
+    .filter((group) => group.items.length > 0)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -547,13 +577,17 @@ function AreaPanel({ node, onEditorChange, onSplitDrag }: {
       if (!menuRef.current?.contains(target) && !triggerRef.current?.contains(target)) setMenuOpen(false)
     }
     const closeOnViewportChange = () => setMenuOpen(false)
+    // The menu is positioned once, so it closes when the page behind it scrolls, but scrolling its own list must not close it.
+    const closeOnOutsideScroll = (event: Event) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false)
+    }
     document.addEventListener('pointerdown', closeOutside)
     window.addEventListener('resize', closeOnViewportChange)
-    window.addEventListener('scroll', closeOnViewportChange, true)
+    window.addEventListener('scroll', closeOnOutsideScroll, true)
     return () => {
       document.removeEventListener('pointerdown', closeOutside)
       window.removeEventListener('resize', closeOnViewportChange)
-      window.removeEventListener('scroll', closeOnViewportChange, true)
+      window.removeEventListener('scroll', closeOnOutsideScroll, true)
     }
   }, [menuOpen])
 
@@ -585,7 +619,7 @@ function AreaPanel({ node, onEditorChange, onSplitDrag }: {
             <span className="editor-type-icon">{iconRegistry.editors[node.editor]}</span><span>{node.editor}</span><span className="editor-type-caret">⌄</span>
           </button>
           {menuOpen && menuPosition && createPortal(<div ref={menuRef} className="editor-type-menu" style={menuPosition} role="menu" aria-label="Editor Type" onKeyDown={(event) => { if (event.key === 'Escape') setMenuOpen(false) }}>
-            {editorGroups.map((group) => <section className="editor-menu-group" key={group.category} role="group" aria-label={group.category}>
+            {visibleGroups.map((group) => <section className="editor-menu-group" key={group.category} role="group" aria-label={group.category}>
               <h3>{group.category}</h3>
               {group.items.map((editor) => <button key={editor} role="menuitemradio" aria-checked={node.editor === editor} className={node.editor === editor ? 'editor-menu-item selected' : 'editor-menu-item'} onClick={() => { onEditorChange(node.id, editor); setMenuOpen(false) }}>
                 <span className="editor-type-icon">{iconRegistry.editors[editor]}</span><span>{editor}</span>{node.editor === editor && <i>✓</i>}
@@ -616,8 +650,10 @@ function StatusBar() {
   }, [])
   const critical = insights.filter((i) => i.severity === 'critical').length
   return <footer className="status-bar">
-    <span><i className="status-online" /> LOCAL MODE</span>
-    <span>DEMO DATA <b>•</b> {state.transactions.length} RECEIPTS <b>•</b> AI MODEL {state.settings.forecastMethod}</span>
+    {state.source === 'live'
+      ? <span title={state.liveError ?? (state.liveSyncedAt ? `Last loaded ${time(state.liveSyncedAt)}` : undefined)}><i className={state.liveError ? 'status-offline' : 'status-online'} /> {state.liveError ? 'SERVER UNREACHABLE · SHOWING LAST DATA' : 'LIVE · STORE DATABASE'}</span>
+      : <span title="The store server hasn't been reached yet, so there is no data to show."><i className="status-demo" /> NOT CONNECTED</span>}
+    <span>{state.transactions.length} RECEIPTS (7 DAYS) <b>•</b> AI MODEL {state.settings.forecastMethod}</span>
     {critical > 0 && <span className="status-alert">{critical} CRITICAL ALERT{critical > 1 ? 'S' : ''}</span>}
     <span className="status-right">{time(now)} <b>·</b> 9010 GROCERY <b>v1.1.0</b></span>
   </footer>

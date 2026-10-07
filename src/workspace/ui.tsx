@@ -45,6 +45,29 @@ export function Field({ label, children, hint }: { label: string; children: Reac
   return <label className="field"><span>{label}</span>{children}{hint && <small>{hint}</small>}</label>
 }
 
+/** A 6-digit PIN box: dots by default, with an eye button to show the digits while typing. */
+export function PinInput({ value, onChange, autoComplete = 'off', autoFocus, onEnter }: {
+  value: string
+  onChange: (pin: string) => void
+  autoComplete?: string
+  autoFocus?: boolean
+  onEnter?: () => void
+}) {
+  const [shown, setShown] = useState(false)
+  return <span className="pin-input">
+    <input type={shown ? 'text' : 'password'} inputMode="numeric" autoComplete={autoComplete} autoFocus={autoFocus} maxLength={6} value={value}
+      onChange={(e) => onChange(e.target.value.replace(/\D/g, '').slice(0, 6))} onKeyDown={(e) => { if (e.key === 'Enter') onEnter?.() }} />
+    <button type="button" className="pin-eye" aria-label={shown ? 'Hide PIN' : 'Show PIN'} aria-pressed={shown} title={shown ? 'Hide PIN' : 'Show PIN'}
+      onMouseDown={(e) => e.preventDefault() /* keep the cursor in the PIN box */} onClick={(e) => { e.preventDefault(); setShown((s) => !s) }}>
+      <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z" />
+        <circle cx="12" cy="12" r="3" />
+        {shown && <path d="M4 4l16 16" />}
+      </svg>
+    </button>
+  </span>
+}
+
 export function Toasts() {
   const { toasts } = useStore()
   return createPortal(<div className="toast-stack" aria-live="polite">{toasts.map((t) => <div key={t.id} className={`toast ${t.tone}`}><span>{t.tone === 'error' ? '!' : t.tone === 'info' ? 'i' : '✓'}</span>{t.message}</div>)}</div>, document.body)
